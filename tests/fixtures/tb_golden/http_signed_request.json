@@ -1,0 +1,13 @@
+{
+  "headers": {
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate, zstd",
+    "connection": "keep-alive",
+    "host": "searx.invalid",
+    "signature": "nexus=:EYAt8+3n5Wuh4KF59Tx2gi6FNTUbtq8oK1hNxTDmaSNfiKjnWKibWvFt8oEpOZ40Ujh5MCqCAO7YxSEbzYlXBA==:",
+    "signature-input": "nexus=(\"@method\" \"@authority\" \"@path\" \"@query\");created=1700000000;expires=1700000300;keyid=\"539c3f5b8b250704887498eb51267f755f3e139eca13108179755078a1f2fb34\";alg=\"ed25519\"",
+    "user-agent": "NEXUS/0.10 (+local synthetic cortex; SearXNG client)"
+  },
+  "method": "GET",
+  "url": "http://searx.invalid/search?q=what+is+the+latest+python+release&format=json"
+}

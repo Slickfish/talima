@@ -1,0 +1,2 @@
+The QTc change at 600 mg was 11.4 ms; we knew it on this date.
+Second line, CRLF kept.

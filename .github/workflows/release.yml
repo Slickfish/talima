@@ -1,0 +1,254 @@
+# The release (RUN_WORKLIST.md W3; run/specs/W3.md D7): on a tag `v*`, the
+# image to GHCR (ghcr.io/<owner>/<repository>:<tag>, and :latest) and W2's desktop
+# bundles (Windows and macOS, built twice and smoked as bundle.yml builds
+# them) as the assets of a GitHub release for the tag.
+#
+# A tag whose name ends in `-dryrun` (v1.2.3-dryrun) runs every build and
+# publishes NOTHING: no registry login, no push, no release. That is how the
+# workflow is exercised without a release existing afterwards; the dry run's
+# summary says so.
+#
+# Nothing here uses a third-party action beyond checkout, setup-python and
+# the artifact actions: the registry login and push are the docker CLI's own
+# commands, the release is `gh release create` with the workflow's token.
+
+name: release
+
+# Amendment 7 (17 November): dispatched by hand with the tag; pushing a tag
+# starts nothing (tests/test_w3_ci.py C18).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing tag to release again (v1.2.3, or v1.2.3-dryrun to publish nothing)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  image:
+    name: image (ghcr.io)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DRYRUN: ${{ endsWith(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-dryrun') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      # The image is named after the repository this runs in, never by a name written here: a release of the
+      # public repository pushes the image its compose file pulls. tests/test_public_names.py (P3) holds this
+      # file by its hash and this job whole, so an edit to either is made there too.
+      - name: Name the image
+        id: name
+        run: |
+          image=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "dryrun=$DRYRUN tag=$RELEASE_TAG image=$image"
+
+      - name: Build
+        run: |
+          set -o pipefail
+          docker build -f deploy/Dockerfile \
+            -t "${{ steps.name.outputs.image }}:$RELEASE_TAG" \
+            -t "${{ steps.name.outputs.image }}:latest" . 2>&1 | tail -n 20
+          docker image inspect "${{ steps.name.outputs.image }}:$RELEASE_TAG" --format 'built {{.Id}} ({{.Size}} bytes)'
+
+      - name: Log in to GHCR
+        if: env.DRYRUN != 'true'
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push
+        if: env.DRYRUN != 'true'
+        run: |
+          docker push "${{ steps.name.outputs.image }}:$RELEASE_TAG"
+          docker push "${{ steps.name.outputs.image }}:latest"
+
+      - name: Dry run
+        if: env.DRYRUN == 'true'
+        run: |
+          echo "dry run ($RELEASE_TAG): the image was built and NOT pushed; no login happened" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  bundles:
+    name: bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Build twice (the same hash, or the files that differ)
+        run: python scripts/build_bundle.py --twice
+      - name: Smoke the bundle's binary
+        run: python scripts/bundle_smoke.py dist/*.mcpb --work "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-bundle-${{ matrix.os }}
+          path: |
+            dist/*.mcpb
+            dist/*.mcpb.sha256
+            dist/*.mcpb.files.txt
+          retention-days: 7
+
+  # W9 (run/specs/W9.md D6) — nexus-verify, the standalone verifier, as a
+  # binary for whoever holds a credential: one file, the standard library
+  # only, so PyInstaller (pinned) is the only thing installed to build it.
+  verifier:
+    name: nexus-verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+        # A release takes one asset per file name: each system's binary is named for it. W11b: the same
+        # verifier is built a second time under the standard's name, and names itself as it was invoked.
+        include:
+          - os: ubuntu-24.04
+            asset: nexus-verify-linux
+            talima: talima-verify-linux
+          - os: windows-latest
+            asset: nexus-verify-windows
+            talima: talima-verify-windows
+          - os: macos-latest
+            asset: nexus-verify-macos
+            talima: talima-verify-macos
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build nexus-verify and talima-verify from scripts/nexus_verify.py with PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "$(grep -E '^pyinstaller==' requirements.txt)"
+          python -m PyInstaller --onefile --clean --noconfirm --name "${{ matrix.asset }}" scripts/nexus_verify.py
+          python -m PyInstaller --onefile --clean --noconfirm --name "${{ matrix.talima }}" scripts/nexus_verify.py
+      - name: The binaries run, each under its own name (nexus-verify --help, talima-verify --help)
+        run: |
+          ./dist/${{ matrix.asset }} --help > help-nexus.txt && grep -q "^usage: nexus-verify" help-nexus.txt || exit 1
+          ./dist/${{ matrix.talima }} --help > help-talima.txt && grep -q "^usage: talima-verify" help-talima.txt || exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}*
+            dist/${{ matrix.talima }}*
+          retention-days: 7
+
+  # W10c (run/specs/W10c.md S9) — talima-intercept, the interceptor, as a binary: the standalone recorder and
+  # only what it loads. PyInstaller follows its imports, and the last step reads the archive it built: the
+  # interceptor's own module is there, and every backend module in it is the interceptor's own or one of the
+  # standalone set the import-graph guard holds (tests/_archive_reach.py reads the set from the guard).
+  interceptor:
+    name: talima-intercept (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-24.04
+            asset: talima-intercept-linux
+          - os: windows-latest
+            asset: talima-intercept-windows
+          - os: macos-latest
+            asset: talima-intercept-macos
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build talima-intercept from backend/intercept/__main__.py with PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "$(grep -E '^pyinstaller==' requirements.txt)" "$(grep -E '^cryptography==' requirements.txt)" "$(grep -E '^uvicorn' requirements.txt)" "$(grep -E '^httpx' requirements.txt)" python-dotenv
+          python -m PyInstaller --onefile --clean --noconfirm --name "${{ matrix.asset }}" --paths . backend/intercept/__main__.py
+      - name: The binary runs under its own name, opens a store of its own and verifies it, and holds no memory engine
+        run: |
+          ./dist/${{ matrix.asset }} --help > help.txt && grep -q "^usage: talima-intercept" help.txt || exit 1
+          NEXUS_INTERCEPT_UPSTREAM=http://127.0.0.1:9 NEXUS_INTERCEPT_DATA_ROOT="$RUNNER_TEMP/talima-intercept" ./dist/${{ matrix.asset }} verify > verify.json && grep -q '"ok": true' verify.json || exit 1
+          grep -q "'backend.intercept.recorder'" "build/${{ matrix.asset }}/PYZ-00.toc" || exit 1
+          python tests/_archive_reach.py "build/${{ matrix.asset }}/PYZ-00.toc" || exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}*
+          retention-days: 7
+
+  release:
+    name: GitHub release
+    needs: [image, bundles, verifier, interceptor]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DRYRUN: ${{ endsWith(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-dryrun') }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+      - name: The assets
+        run: find assets -type f | sort | tee "$RUNNER_TEMP/assets.txt"
+      - name: Create the release with the bundles as assets
+        if: env.DRYRUN != 'true'
+        run: |
+          image=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          notes="NEXUS $RELEASE_TAG. Image: $image:$RELEASE_TAG. Bundles: the Windows and macOS desktop bundles (.mcpb) with their sha256 and file lists; see docs/UAT_GUIDE.md. nexus-verify and talima-verify: the standalone credential verifier for Linux, Windows and macOS, under the engine's name and under the standard's (the same verifier). talima-intercept: the interceptor, a standalone recorder for agent harnesses, for the same three systems; see docs/INTERCEPTOR.md. Deploy: docs/DEPLOY.md."
+          mapfile -t files < <(find assets -type f | sort)
+          gh release create "$RELEASE_TAG" --title "NEXUS $RELEASE_TAG" --notes "$notes" "${files[@]}"
+      - name: Dry run
+        if: env.DRYRUN == 'true'
+        run: |
+          {
+            echo "dry run ($RELEASE_TAG): the bundles were built and smoked, the image built; NO release was created and nothing was pushed."
+            echo "assets that a release would carry:"
+            cat "$RUNNER_TEMP/assets.txt"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

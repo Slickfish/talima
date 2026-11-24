@@ -1,0 +1,151 @@
+# The bundle: build the MCP bundle and smoke its binary (RUN_WORKLIST.md W2's
+# exit; run/specs/W2.md D7).
+#
+# Staged like ci.yml (RUN_CHARTER.md §7, amendment 2): on windows when a push
+# changes what the bundle is made of (backend/, the build and smoke scripts,
+# requirements.txt, this file); on windows and macos when the head commit's
+# message contains [ci full], and on manual dispatch. The plan job decides,
+# from the push's own diff, and says why; a push that changes none of those
+# files and is not [ci full] runs nothing past it.
+#
+# A push to claude/run-docs (the documentation session's branch), or one
+# that changes only documents (run/specs/**, any *.md file at the repository
+# root, docs/** and LICENSE), starts no run of this workflow at all, not even
+# the plan job: `branches-ignore` and `paths-ignore` on the push trigger, the
+# same as ci.yml and deploy-smoke.yml (the operator's instructions of 11 and 16 November).
+# GitHub decides that from the branch and the files the push changed and
+# cannot read a commit message, so a commit marked [ci full] that changes
+# nothing but documents builds no bundle, a closing commit and a merge of
+# claude/run-docs included. If such a push needs this workflow, dispatch it
+# by hand: a dispatch has no path filter.
+#
+# Each bundle job installs from requirements.txt alone, builds twice in the
+# same place (`build_bundle.py --twice`: the same hash, or the files that
+# differ, printed), then runs `bundle_smoke.py` on the bundle it built: the
+# binary started as the desktop app starts it. The bundle is kept as an
+# artifact only on dispatch or [ci full], for three days: an artifact counts
+# against the account's storage.
+
+name: bundle
+
+# Amendment 7 (17 November): started by hand only. The push and pull-request
+# triggers are gone (tests/test_w3_ci.py C18); the staging below still reads
+# the mark and the push's diff, and a dispatch runs everything.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundle-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          python3 - <<'EOF'
+          import os, subprocess
+          event, before, message = os.environ["EVENT"], os.environ.get("BEFORE", ""), os.environ.get("MESSAGE", "")
+          watched = ("backend/", "scripts/build_bundle.", "scripts/bundle_smoke.py", "requirements.txt",
+                     ".github/workflows/bundle.yml")
+          if event == "workflow_dispatch" or "[ci full]" in message:
+              matrix, why = '["windows-latest", "macos-latest"]', f"{event}; [ci full]: {'[ci full]' in message}"
+          else:
+              if not before or set(before) == {"0"}:
+                  changed, how = None, "a new branch: no previous head to compare"
+              else:
+                  proc = subprocess.run(["git", "diff", "--name-only", before, "HEAD"], capture_output=True, text=True)
+                  changed = proc.stdout.split() if proc.returncode == 0 else None
+                  how = f"{len(changed)} files changed since {before[:7]}" if changed is not None else f"{before[:7]} is not in the history"
+              hit = changed is None or any(p.startswith(watched) for p in changed)
+              matrix = '["windows-latest"]' if hit else "[]"
+              why = how + ("; the bundle's files are among them" if changed and hit else "")
+          print(f"bundle plan: {matrix} ({why})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"matrix={matrix}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(f"### bundle plan\n\n{matrix}: {why}\n")
+          EOF
+
+  bundle:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    name: bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build twice (the same hash, or the files that differ)
+        run: |
+          set -o pipefail
+          python scripts/build_bundle.py --twice 2>&1 | tee "$RUNNER_TEMP/build.txt"
+
+      - name: Smoke the bundle's binary
+        run: |
+          set -o pipefail
+          python scripts/bundle_smoke.py dist/*.mcpb --work "$RUNNER_TEMP/smoke" 2>&1 | tee "$RUNNER_TEMP/smoke.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### bundle on ${{ matrix.os }}"
+            echo
+            echo '```'
+            grep -E "^(commit|platform|environment|pkg_resources in this environment|frozen:|built|reproducible|NOT REPRODUCIBLE|bundle:|REFUSED)" "$RUNNER_TEMP/build.txt" 2>/dev/null || echo "no build output"
+            grep -E "^(PASS|FAIL|bundle smoke)" "$RUNNER_TEMP/smoke.txt" 2>/dev/null || echo "no smoke output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The processes' stderr on failure
+        if: failure()
+        run: |
+          for f in "$RUNNER_TEMP"/smoke/stderr-*.txt; do
+            [ -f "$f" ] || continue
+            echo "== $f"
+            tail -n 40 "$f"
+          done
+
+      - name: Keep the bundle (dispatch or [ci full] only, three days)
+        if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-bundle-${{ matrix.os }}
+          path: |
+            dist/*.mcpb
+            dist/*.mcpb.sha256
+            dist/*.mcpb.files.txt
+          retention-days: 3

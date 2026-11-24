@@ -1,0 +1,93 @@
+{
+  "as_of_instants": [
+    {
+      "held": 4,
+      "iso": "2026-10-31T07:42:18.074892+00:00",
+      "ts": 1793432538.0748916
+    },
+    {
+      "held": 5,
+      "iso": "2026-10-31T07:42:20.445705+00:00",
+      "ts": 1793432540.4457054
+    },
+    {
+      "held": 4,
+      "iso": "2026-10-31T07:42:22.710016+00:00",
+      "ts": 1793432542.7100158
+    }
+  ],
+  "backend_tree": "ba6a1448aa319cf93e1a088a21da4ba7ae809257",
+  "chain": {
+    "blocks": 2,
+    "head_hash": "f84e6c2a704b09d28bb5525a5c324293508331472d0bb560124c290dc588719f",
+    "valid_at_capture": true
+  },
+  "files": {
+    "archive.db": "5fed96e332c933da3c22894e4402a4dade9fb40e8e24127d66bfa2882da041b3",
+    "kb.db": "36d99a74ec9fb6efddf566c55b40f0351f427f9181eef5840848861db34abe7e",
+    "snapshots/cortex-1793432541.json": "2283466a0135d9607af8c50e85dd276857d6c0056e316e375e3a8c385e566d2a"
+  },
+  "generated_at": "2026-10-31T07:42:23+00:00",
+  "generator": "tests/fixtures/make_pre_run_data.py",
+  "governance_at_capture": {
+    "failing": [
+      {
+        "key": "4ae718be-5063-459f-b84b-500d832047a2",
+        "layer": "row",
+        "table": "recalibration_events"
+      }
+    ],
+    "row_failures": 1,
+    "verdict": "row_hash_mismatch"
+  },
+  "head": "f45a18fd43762511a49270fc5eab5ebd60551dc2",
+  "lineage": {
+    "all_intact_at_capture": true,
+    "count": 5,
+    "learning_modes": [
+      "frozen",
+      "live"
+    ],
+    "record_hashes": [
+      "0076dc021b735f33955b0e51479d639cad6d349f719c35ec235bc4634ac3266b",
+      "1a2b6d7b7f0885a0d64998ad6f0532841688cb0388c110ab3f785dbd56da1d01",
+      "42c2b3676406739d8e4f36fb6f979a85b8710989fdc6e9cefd385a71f9463b10",
+      "92181d74436dd09ea87b21621eb921b49ed0bc2364e113bd9827c3b969cc646a",
+      "bcaaa040a3aa1db313d3cb73e22a7284b7da51938751cd8a2b631dc8b86f24b6"
+    ],
+    "record_hashes_sha256": "ded64d90fd07d79ac8c1e9aa6a523f6b59118356f4d09292daf73fefacdcbe53",
+    "scopes": [
+      "full_turn",
+      "mcp_block"
+    ]
+  },
+  "platform": "linux",
+  "python": "3.11.17",
+  "responses": {
+    "assert_confirmed": 200,
+    "assert_unconfirmed": 422,
+    "kairos_cycle": 200,
+    "mcp_record_keys": [
+      "cited",
+      "done",
+      "injected",
+      "lineage_id",
+      "record_hash",
+      "state"
+    ],
+    "outcome_approved": 200,
+    "outcome_superseded": 200
+  },
+  "turns": {
+    "console": [
+      "af771c8d-ed42-4e7d-a2b8-456a7a408560",
+      "bdc0f7cc-002b-43d9-b194-27d55ccfea9d",
+      "8d46637c-f4f6-43a7-b402-61891e3abc82",
+      "ed309cd5-61b0-4fe0-ad22-8694d09d0b45"
+    ],
+    "mcp": [
+      "8f56e19d-a504-4376-9596-2e73c65c5cb6"
+    ]
+  },
+  "what": "a data directory as NEXUS writes it, captured before W0b's first record-layer change"
+}

@@ -1,0 +1,51 @@
+[
+  { "_comment": "CORRECTED. Each 'expect' lists EVERY stored claim that would be a correct answer, not one row guessed in advance. The first version treated 11.4ms as the only right answer to 'cardiac safety' and scored rank 7 as a miss — it measured the guess, not the retrieval. Fragments here are inferred from observed store contents; a fragment that is NOT in the store makes its pair unanswerable and drags the headline down for no reason. Check any you doubt before quoting a number." },
+
+  { "_group": "A — word overlap. Control group: these should work on the lexical channel alone. If any MISS, the problem is lexical, not semantic." },
+
+  { "question": "what was the QTc change at 600mg?",                     "expect": ["11.4ms", "supratherapeutic"] },
+  { "question": "what is the hERG IC50 for TAK-441?",                    "expect": ["18.4", "hERG", "IC50"] },
+  { "question": "what enzyme metabolises TAK-441?",                      "expect": ["CYP3A4"] },
+  { "question": "what was the QTc change at the 200mg dose?",            "expect": ["2.1ms", "200mg"] },
+  { "question": "what is the regulatory threshold for QT prolongation?", "expect": ["10ms", "regulatory_threshold"] },
+  { "question": "what does QTc stand for?",                              "expect": ["corrected QT", "corrects_for"] },
+  { "question": "what does interval training improve?",                  "expect": ["endurance", "cardiac_output", "heart_muscle", "cardiovascular"] },
+  { "question": "what causes megaloblastic anemia?",                     "expect": ["B12", "Vitamin_B12"] },
+  { "question": "what is Python used for?",                              "expect": ["machine learning", "machine_learning", "artificial intelligence"] },
+  { "question": "what framework uses Python type hints?",                "expect": ["FastAPI"] },
+
+  { "_group": "B — NO word overlap. The group this measurement exists for: the concept is stored, the question's vocabulary is not." },
+
+  { "question": "what do we know about cardiac safety?",                 "expect": ["QT_prolongation", "11.4ms", "hERG", "exceeds_regulatory_thresholds", "cardiotoxicity"] },
+  { "question": "is there any heart risk with this compound?",           "expect": ["QT_prolongation", "11.4ms", "cardiotoxicity", "hERG"] },
+  { "question": "any signal of arrhythmia in the trial data?",           "expect": ["QT_prolongation", "11.4ms", "QT interval", "cardiotoxicity"] },
+  { "question": "what did the preclinical work show?",                   "expect": ["hERG", "18.4", "preclinical"] },
+  { "question": "are there drug interaction concerns?",                  "expect": ["CYP3A4", "inhibitors", "exposure"] },
+  { "question": "what affects how the body clears this drug?",           "expect": ["CYP3A4", "metabol"] },
+  { "question": "is the higher dose safe?",                              "expect": ["11.4ms", "supratherapeutic", "exceeds_regulatory_thresholds"] },
+  { "question": "what are the cardiovascular benefits of exercise?",     "expect": ["cardiac_output", "heart_muscle", "cardiovascular", "heart_disease", "VO2"] },
+  { "question": "how does fitness training affect the heart?",           "expect": ["cardiac_output", "heart_function", "heart_muscle", "interval_training"] },
+  { "question": "what nutritional deficiency affects blood cells?",      "expect": ["B12", "iron", "anemia"] },
+  { "question": "what causes tiredness from low red cell count?",        "expect": ["anemia", "Hemoglobin", "red_blood_cells"] },
+  { "question": "which programming language is popular for AI work?",    "expect": ["python", "Python"] },
+  { "question": "what web technology is fast and modern?",               "expect": ["FastAPI"] },
+
+  { "_group": "C — paraphrase and abstraction. The concept is present but stated at a different level of generality than the question." },
+
+  { "question": "summarise the dose-response relationship",              "expect": ["11.4ms", "2.1ms", "supratherapeutic", "shows_minimal_qtc_changes_at_lower_doses"] },
+  { "question": "what changed between the two dose levels?",             "expect": ["11.4ms", "2.1ms", "200mg", "600mg"] },
+  { "question": "what evidence supports the safety conclusion?",         "expect": ["hERG", "18.4", "align_with_one_another", "QT_prolongation"] },
+  { "question": "what monitoring was done during the study?",            "expect": ["Holter", "ecgs", "QT interval"] },
+  { "question": "what kind of study design was used?",                   "expect": ["randomized", "double_blind"] },
+  { "question": "what should a prescriber be careful about?",            "expect": ["CYP3A4", "inhibitors", "adverse"] },
+  { "question": "why does heart rate matter when reading an ECG?",       "expect": ["corrects_for", "resting heart rate", "appear shorter"] },
+
+  { "_group": "D — expected to MISS. If any of these are FOUND, the semantic channel is admitting what it should not, and a recall figure without this check is half a measurement." },
+
+  { "question": "what is the boiling point of water?",                   "expect": ["100 degrees", "boiling point"], "expect_miss": true },
+  { "question": "who won the 1966 world cup?",                           "expect": ["1966", "world cup"], "expect_miss": true  },
+  { "question": "how do I change a car tyre?",                           "expect": ["tyre", "jack"], "expect_miss": true  },
+  { "question": "what is the capital of Peru?",                          "expect": ["Lima", "Peru"], "expect_miss": true },
+  { "question": "what is the recommended dose in renal impairment?",     "expect": ["renal"], "expect_miss": true},
+  { "question": "what were the phase 3 efficacy results?",               "expect": ["phase 3", "efficacy"], "expect_miss": true  }
+]

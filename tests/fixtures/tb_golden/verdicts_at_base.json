@@ -1,0 +1,129 @@
+{
+  "action_receipt.json": {
+    "args": [
+      "--action",
+      "action_receipt.json",
+      "--identity",
+      "identity.json"
+    ],
+    "exit": 0,
+    "verdict": {
+      "action": {
+        "action_id": "b80ac350-4587-44b3-94b0-cb882ab8783a",
+        "completed_at": 1700000000.000097,
+        "credentials_json": "[]",
+        "evidence_class": "runtime",
+        "identity_commitment": "b5b92dfd83329e9e36525976e2bfe07df042d1c74ae9db847f1d5f9767f922b3",
+        "identity_mechanism": "asserted",
+        "kind": "web_search",
+        "lineage_id": null,
+        "method": "GET",
+        "request_hash": "f8eab37e47b96b3a0c817e8cd426082dfe027e2d60c613ebc08206af4dc2db9c",
+        "requested_at": 1700000000.000094,
+        "response_hash": "234252539f3f0cfeb802d8030a7df3aaa14817afa268b60b33d7592cce517bba",
+        "signature": "EYAt8+3n5Wuh4KF59Tx2gi6FNTUbtq8oK1hNxTDmaSNfiKjnWKibWvFt8oEpOZ40Ujh5MCqCAO7YxSEbzYlXBA==",
+        "signature_key_id": "539c3f5b8b250704887498eb51267f755f3e139eca13108179755078a1f2fb34",
+        "state": "completed",
+        "status": "200",
+        "target": "http://searx.invalid/search",
+        "trigger_route": "/search/execute"
+      },
+      "failures": [],
+      "notes": [
+        "accountable: None (asserted), disclosed",
+        "action: runtime web_search GET http://searx.invalid/search, completed (status 200)"
+      ],
+      "verified": true
+    }
+  },
+  "commitment_receipt.json": {
+    "args": [
+      "--reveal",
+      "commitment_receipt.json",
+      "--content",
+      "commitment_content.txt",
+      "--salt",
+      "973598fa62a89efc9b89d3b07c6111e2af3813aa6d198a9ea6d899d9b87fe0bb",
+      "--identity",
+      "identity.json"
+    ],
+    "exit": 0,
+    "verdict": {
+      "failures": [],
+      "held_at": 1700000000.0001,
+      "notes": [],
+      "verified": true
+    }
+  },
+  "credential.json": {
+    "args": [
+      "credential.json",
+      "--identity",
+      "identity.json"
+    ],
+    "exit": 0,
+    "verdict": {
+      "disclosed": {},
+      "failures": [],
+      "notes": [],
+      "verified": true
+    }
+  },
+  "credential_disclosed.json": {
+    "args": [
+      "credential_disclosed.json",
+      "--identity",
+      "identity.json"
+    ],
+    "exit": 0,
+    "verdict": {
+      "disclosed": {
+        "model_id": "deepseek-r1:14b-qwen-distill-q4_K_M"
+      },
+      "failures": [],
+      "notes": [],
+      "verified": true
+    }
+  },
+  "credential_tombstoned.json": {
+    "args": [
+      "credential_tombstoned.json",
+      "--identity",
+      "identity.json"
+    ],
+    "exit": 0,
+    "verdict": {
+      "disclosed": {},
+      "failures": [],
+      "notes": [],
+      "verified": true
+    }
+  },
+  "http_signed_request.json": {
+    "verified": true
+  },
+  "proof.json": {
+    "refusal": null
+  },
+  "proof_tombstoned.json": {
+    "refusal": null
+  },
+  "replay_capture.json": {
+    "request_matches_its_hash": true
+  },
+  "store": {
+    "chain": {
+      "broken_at": null,
+      "missing_snapshots": [],
+      "n_blocks": 2,
+      "reason": "",
+      "valid": true
+    },
+    "sealed_lineage": {
+      "records_checked": 3,
+      "sealed_without_row": 0,
+      "tombstoned": 1,
+      "verdict": "intact"
+    }
+  }
+}

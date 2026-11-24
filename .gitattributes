@@ -1,0 +1,29 @@
+# A pre-registration is hashed, and the hash is committed in the script that
+# refuses to run on a changed file. core.autocrlf on a Windows checkout turned
+# every LF into CRLF and the run refused a file nobody had edited (3a-3b).
+# The hash now normalises line endings before hashing; this keeps the bytes
+# the same on every platform as well.
+BB3_PREREGISTRATION.md text eol=lf
+*_PREREGISTRATION.md text eol=lf
+
+# W0b: the pre-run data fixture is bytes captured once and pinned by sha256 in
+# its MANIFEST.json; a Windows checkout must not rewrite the snapshot JSON's
+# line endings, or the digest and the sealed snapshot no longer match.
+tests/fixtures/pre_run_data/** -text
+
+# W5: the injection set is hashed, and the hash was registered before the
+# gateway's code. A Windows checkout gave it CRLF line endings and the harness
+# refused it at collection (the closing run of 16 November). The harness now
+# hashes the text with LF line endings; this keeps the checkout's bytes the
+# same on every platform as well.
+run/specs/W5_injection_set.json text eol=lf
+tests/fixtures/W5_injection_set.json text eol=lf
+
+# W11d: the specification's vectors are named by the SHA-256 of their bytes
+# (docs/TALIMA_SPEC.md, section 14), and one of them is content whose line
+# ends are part of what a commitment is over. No checkout may rewrite them:
+# they are kept exactly as committed. (The test that reads the digests also
+# reads a JSON vector's line ends back as LF, for a checkout made before this
+# rule.)
+tests/fixtures/tb_golden/** -text
+tests/fixtures/w11d/** -text

@@ -1,0 +1,18 @@
+{
+ "captured_at_commit": "85c0b54 (pre v3.1 Phase 1), 2026-09-28",
+ "fixture": "scripts/history_shape_harness._build_store fixture store; harness _Stub provider with no plant; five turns; nothing supplied for attribution",
+ "questions": [
+  "what does interval training improve?",
+  "and what does it reduce?",
+  "so is it good for recovery?",
+  "does caffeine improve endurance?",
+  "what helps recovery?"
+ ],
+ "request_hashes": [
+  "f476807c14c77dcdc47fb0f741c8744aa629021f259c812179355921b99384d8",
+  "516668d142c50e0cde18f34d8976deac476b01230f1692ca12e45c2f2fe2a196",
+  "2740101daaee52f7f9bb5f6e7939e83a06b2e0f61de4fb138dbccbc6130c5ada",
+  "000d33c8ef376b8f6d40de569e4c7351fdb0d1613747b655494d8506f6122a92",
+  "8c0b48bb9690512b74bc3639c544fca6047211282e6ef220152d3319a01f1c95"
+ ]
+}

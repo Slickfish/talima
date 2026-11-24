@@ -1,0 +1,20 @@
+{
+ "captured_at_commit": "9b200e9 (the W4 base, before any W4 change), 2026-11-12",
+ "fixture": "scripts/history_shape_harness._build_store fixture store; harness _Stub provider with no plant; five turns through POST /chat with the bearer on a TestClient (no context manager: no lifespan, so no KAIROS cycle and no startup probe); token mode, production's defaults (the history wrapper on); nothing supplied for attribution; each turn's request_hash read from its lineage record",
+ "clock": "tests/fixtures/ce_rig.RigClock (one microsecond per read) installed as time.time around the seeding and every request; measured on the capture host, the host clock and RigClocks of 2 ms and 50 ms per read gave the same five hashes",
+ "capture": "the same function the pin runs (tests/test_w4_identity.py: route_request_hashes), run three times on the base under PYTHONHASHSEED 0, 1 and 12345: the fifteen hashes agreed turn for turn",
+ "questions": [
+  "what does interval training improve?",
+  "and what does it reduce?",
+  "so is it good for recovery?",
+  "does caffeine improve endurance?",
+  "what helps recovery?"
+ ],
+ "request_hashes": [
+  "f476807c14c77dcdc47fb0f741c8744aa629021f259c812179355921b99384d8",
+  "a45043f8565e52254295cb9a64d9bbef582820e67598230640935101ab225693",
+  "f4df77c0f0548bd051d2c2ec7b480b18b069ece784d9f11b076f5ebc5d875455",
+  "7b12b3744bf3451423aaf814a232c18bd0b6283fe03f43ae5198a569d0db8cff",
+  "b7e0272e98416c299c081fada66e13f5fc888fec6c0808c3ff5959025fe9b88c"
+ ]
+}

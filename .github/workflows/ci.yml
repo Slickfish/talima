@@ -1,0 +1,798 @@
+# CI is the platform truth (RUN_CHARTER.md §2, D2; RUN_WORKLIST.md W0).
+#
+# Staged (RUN_CHARTER.md §7, amendment 2 of 4 November): every push runs the
+# suite on ubuntu and windows (windows is where the clock class lives); macos
+# runs only when the head commit's message contains [ci full], an item's
+# closing commit, and on manual dispatch. Law 11 is met at an item's close.
+# The run/wip/** branches hold unintegrated work and run nothing, and so does
+# claude/run-docs, the documentation session's branch (the operator's
+# instruction of 16 November): its documents are tested when it is merged,
+# by the tests the merging session runs and the dispatch a merge then needs
+# (below), never by the merge's own push.
+#
+# A push that changes only documents starts nothing either: the push trigger
+# ignores run/specs/**, every *.md file at the repository root (the RUN_*.md
+# records, BACKLOG.md, CHANGELOG.md, CLAUDE.md and the rest), docs/** and
+# LICENSE (the operator's instructions of 11 and 16 November). bundle.yml and
+# deploy-smoke.yml carry the same four patterns. A markdown file anywhere
+# else (deploy/*.md) is not ignored. GitHub decides this from the files the
+# push changed, before any job exists, so no run is created at all; a pull
+# request and a manual dispatch are not filtered. The filter cannot read a
+# commit message: a commit marked [ci full] that changes nothing but those
+# files starts nothing, and that includes a closing commit that changes only
+# documents and records, and a merge of claude/run-docs. Several tests read
+# the documents, so after such a push, dispatch ci, bundle and deploy-smoke
+# by hand: a dispatch has no path filter and runs everything.
+#
+# Windows runs in four parallel shards (the same instruction; the
+# suite-windows job and scripts/ci_shard.py): the same test files, each in
+# exactly one shard, and the same number of tests in total, which the last
+# job adds up and compares with the unsharded count on every run. ubuntu
+# and macos run the suite whole, as before. A closing [ci full] run
+# therefore covers what it covered before: ubuntu and macos unsharded, every
+# test file once on windows, and the Postgres job (which an unmarked push
+# runs only where it changed a store file: the plan job, below).
+#
+# The simulated UAT (W4 part 4, run/specs/W4.md D23; RUN_CHARTER.md D2 and
+# D6) is two jobs here that run scripts/uat_simulate.py, never pytest: it
+# drives the product from outside as a tester and an operator would, on the
+# suite's staging (ubuntu and windows on every push, macos too at [ci full]
+# and on dispatch), and its hosted section on Postgres beside the suite's
+# own Postgres service. Its verdicts are the script's own lines, which the
+# step summary copies; its report is kept as an artifact.
+#
+# The full suite, Python 3.11, installed from requirements.txt alone, with
+# two sentinels around it:
+#   - data/ holds only the tracked .gitkeep files before and after (law 2);
+#   - the worktree is unchanged by the suite (B-44): `git status --porcelain`
+#     is empty after it, so a test that writes into the checkout fails here.
+# The suite's own summary line is printed per platform and written to the
+# job summary, so the counts are read, never inferred.
+#
+# Nothing here sets PYTHONUTF8 or any other interpreter mode the operator's
+# machine does not have: a test that passes only under a mode the product
+# never runs under has not passed (law 11).
+
+name: ci
+
+# Amendment 7 (17 November): started by hand only. The push and pull-request
+# triggers are gone (tests/test_w3_ci.py C18); the staging below still reads
+# the mark and the push's diff, and a dispatch runs everything.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # The operator's Amendment 6 of 16 November, clause 6. A run that is not a
+  # closing run shares one group with its branch and cancels the branch's
+  # earlier run: a superseded run's result is read by nobody. A head commit
+  # marked [ci full] and a manual dispatch are an item's evidence: each gets
+  # a group of its own (its run id), cancels nothing and is cancelled by
+  # nothing. (A push of several commits runs the head only, so [ci full]
+  # must be in the head commit's message.) What a cancelled run had decided
+  # from its own diff is lost with it: a push that changed a store file,
+  # superseded before its Postgres job finished by a push that changed none,
+  # is not run on Postgres until the close, where everything runs (BACKLOG
+  # A6-1). bundle.yml and deploy-smoke.yml decide from each push's diff too,
+  # and keep one group per commit, never cancelled. tests/test_w3_ci.py C17.
+  group: ci-${{ (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) }}
+
+jobs:
+  # The operator's Amendment 6 of 16 November, clause 6: the Postgres suite
+  # runs on a head commit marked [ci full], on a manual dispatch, and on a
+  # push that changed a file under backend/store/, backend/kb/ or
+  # backend/memory/; on any other push it is skipped, by name. This job
+  # decides, from the push's own diff, and says why. With no previous head
+  # to compare (a new branch, a forced push, a pull request) the suite runs.
+  # Names are read with -z, as git holds them: without it git quotes a name
+  # that is not ASCII, and a quoted name begins with no watched directory.
+  # tests/test_w3_ci.py C16 executes this step case by case.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      postgres: ${{ steps.plan.outputs.postgres }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          python3 - <<'EOF'
+          import os, subprocess
+          event, before, message = os.environ["EVENT"], os.environ.get("BEFORE", ""), os.environ.get("MESSAGE", "")
+          watched = ("backend/store/", "backend/kb/", "backend/memory/")
+          if event == "workflow_dispatch" or "[ci full]" in message:
+              postgres, why = True, f"{event}; [ci full]: {'[ci full]' in message}"
+          else:
+              if not before or set(before) == {"0"}:
+                  changed, how = None, "no previous head to compare"
+              else:
+                  proc = subprocess.run(["git", "diff", "--name-only", "-z", before, "HEAD"], capture_output=True)
+                  names = proc.stdout.decode("utf-8", "replace").split("\0")
+                  changed = [name for name in names if name] if proc.returncode == 0 else None
+                  how = f"{len(changed)} files changed since {before[:7]}" if changed is not None else f"{before[:7]} is not in the history"
+              postgres = changed is None or any(name.startswith(watched) for name in changed)
+              why = how + ("; a store file is among them" if changed and postgres else "")
+          word = "true" if postgres else "false"
+          print(f"ci plan: postgres={word} ({why})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"postgres={word}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(f"### ci plan\n\nthe Postgres suite: {word} ({why})\n")
+          EOF
+
+  suite:
+    name: suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu and macos on dispatch or on a head commit marked [ci full];
+        # ubuntu otherwise. On a pull request there is no head_commit, so
+        # ubuntu. Windows is not in this matrix: it runs on every push, in
+        # shards, in the suite-windows job below.
+        os: ${{ fromJSON((github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Platform stamp
+        run: |
+          python - <<'EOF'
+          import os, platform, sys
+          print(f"platform: {sys.platform} / {platform.platform()} / python {platform.python_version()} / sep {os.sep!r}")
+          try:
+              import playwright  # noqa: F401
+              print("playwright: installed")
+          except ImportError:
+              print("playwright: not installed (its tests skip by name)")
+          EOF
+
+      - name: data/ sentinel (before the suite)
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          assert not extra, f"data/ holds more than .gitkeep files before the suite: {extra}"
+          EOF
+
+      - name: Full suite
+        run: |
+          set -o pipefail
+          python -m pytest tests -q -p no:cacheprovider -rfE 2>&1 | tee "$RUNNER_TEMP/suite.txt"
+
+      - name: Suite counts
+        if: always()
+        run: |
+          line="$(tail -n 1 "$RUNNER_TEMP/suite.txt" 2>/dev/null || echo 'no suite output')"
+          echo "suite (${{ matrix.os }}, python 3.11): $line"
+          {
+            echo "### suite on ${{ matrix.os }}"
+            echo
+            echo '```'
+            echo "$line"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: data/ and worktree sentinels (after the suite)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          status = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                  text=True, encoding="utf-8", check=True).stdout
+          print("git status --porcelain:", repr(status))
+          assert not extra, f"the suite left files in data/: {extra}"
+          assert status == "", f"the suite changed the worktree:\n{status}"
+          EOF
+
+  # The windows suite in four parallel shards (scripts/ci_shard.py). Each
+  # shard makes ONE unsharded collection on its own runner, so the unsharded
+  # count is measured where the shard runs; splits the tracked test files by
+  # it (the same partition on every runner for the same tree: the script
+  # says why, and the total job refuses shards that disagree); runs its
+  # files with the flags the unsharded suite uses; and requires its outcomes
+  # to sum to its expected count, so a file pytest did not run, or a test
+  # that was deselected, fails the shard. The other steps are the suite
+  # job's, word for word (tests/test_w3_ci.py compares them).
+  #
+  # A shard runs a quarter of the files in one process, so a test that
+  # passed only because another file ran before it fails here. That is a
+  # defect in the test, to be fixed at its cause (law 10); no order is
+  # pinned and no file depends on another.
+  suite-windows:
+    name: suite (windows-latest, shard ${{ matrix.shard }} of 4)
+    runs-on: windows-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Platform stamp
+        run: |
+          python - <<'EOF'
+          import os, platform, sys
+          print(f"platform: {sys.platform} / {platform.platform()} / python {platform.python_version()} / sep {os.sep!r}")
+          try:
+              import playwright  # noqa: F401
+              print("playwright: installed")
+          except ImportError:
+              print("playwright: not installed (its tests skip by name)")
+          EOF
+
+      - name: data/ sentinel (before the suite)
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          assert not extra, f"data/ holds more than .gitkeep files before the suite: {extra}"
+          EOF
+
+      - name: Split (one unsharded collection on this runner, then this shard's files)
+        run: |
+          set -o pipefail
+          # The collection's stdout is the split's input; on a failure its
+          # end is printed, where pytest names what it could not collect.
+          python -m pytest tests --collect-only -q -rs -p no:cacheprovider > "$RUNNER_TEMP/collect.txt" || { tail -n 120 "$RUNNER_TEMP/collect.txt"; exit 1; }
+          python scripts/ci_shard.py split --shards 4 --index "${{ matrix.shard }}" --collected "$RUNNER_TEMP/collect.txt" --json "$RUNNER_TEMP/shard-${{ matrix.shard }}.json" --files "$RUNNER_TEMP/shard-files.txt"
+
+      - name: Suite (this shard's files)
+        run: |
+          set -o pipefail
+          mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
+          python -m pytest "${files[@]}" -q -p no:cacheprovider -rfE 2>&1 | tee "$RUNNER_TEMP/suite.txt"
+
+      - name: Shard counts (the outcomes must sum to this shard's expected count)
+        if: always()
+        run: |
+          python scripts/ci_shard.py check --json "$RUNNER_TEMP/shard-${{ matrix.shard }}.json" --output "$RUNNER_TEMP/suite.txt" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep this shard's counts for the total (one day)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-windows-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-${{ matrix.shard }}.json
+          retention-days: 1
+
+      - name: data/ and worktree sentinels (after the suite)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          status = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                  text=True, encoding="utf-8", check=True).stdout
+          print("git status --porcelain:", repr(status))
+          assert not extra, f"the suite left files in data/: {extra}"
+          assert status == "", f"the suite changed the worktree:\n{status}"
+          EOF
+
+  # The shards' total: each shard's counts by outcome, their sum, and the
+  # unsharded count beside it, in the log and the job summary. It runs
+  # whatever the shards did, and fails unless every shard reported, all
+  # agree on the unsharded count and on the partition, every tracked test
+  # file of this checkout is in exactly one shard, and the outcomes sum to
+  # the unsharded total. The runner's own python3 and nothing installed:
+  # the script is standard library only (its .env loader says, on stderr,
+  # that python-dotenv is absent; nothing here reads a .env).
+  suite-windows-total:
+    name: suite (windows-latest, the shards' total)
+    needs: suite-windows
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The shards' counts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: suite-windows-shard-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+
+      - name: The shards' sum against the unsharded count
+        if: always()
+        run: |
+          python3 scripts/ci_shard.py total --shards 4 --dir "$RUNNER_TEMP/shards" --summary "$GITHUB_STEP_SUMMARY"
+
+  # W4b (run/specs/W4b.md D5; the operator's instruction of 14 November):
+  # the suite through a virtual environment's interpreter on windows, as
+  # the operator's merge gate runs it (`.venv\Scripts\python.exe -m
+  # pytest`) and as start.py installs NEXUS. On windows that file is the
+  # venv launcher, which starts the base interpreter as its own child: a
+  # test that started `sys.executable` held the launcher's pid, and the
+  # W4 gate hung on the operator's machine (run/specs/W4b.md S1). The
+  # steps are the windows shard job's, word for word, but for the
+  # interpreter (the venv's, in every command but the one that makes the
+  # venv), the step that makes it and checks that it is a launcher, and
+  # the shard files' artifact name (tests/test_w3_ci.py C12b). Staged like
+  # macos (amendment 2, the cost): an item's closing commit, marked
+  # [ci full], and a manual dispatch; its own total beside it.
+  suite-windows-venv:
+    name: suite (windows-latest, venv, shard ${{ matrix.shard }} of 4)
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]') }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python.exe -m pip install --upgrade pip
+          .venv/Scripts/python.exe -m pip install -r requirements.txt
+
+      - name: The suite's interpreter is a virtual environment's launcher
+        run: |
+          .venv/Scripts/python.exe - <<'EOF'
+          import os, sys
+          base = getattr(sys, "_base_executable", "")
+          print(f"executable {sys.executable}; base {base}; prefix {sys.prefix}; base prefix {sys.base_prefix}")
+          assert sys.prefix != sys.base_prefix, "the suite's interpreter is not a virtual environment's"
+          assert os.path.normcase(sys.executable) != os.path.normcase(base), \
+              "sys.executable is the interpreter itself, not the venv launcher the operator's gate runs"
+          EOF
+
+      - name: Platform stamp
+        run: |
+          .venv/Scripts/python.exe - <<'EOF'
+          import os, platform, sys
+          print(f"platform: {sys.platform} / {platform.platform()} / python {platform.python_version()} / sep {os.sep!r}")
+          try:
+              import playwright  # noqa: F401
+              print("playwright: installed")
+          except ImportError:
+              print("playwright: not installed (its tests skip by name)")
+          EOF
+
+      - name: data/ sentinel (before the suite)
+        run: |
+          .venv/Scripts/python.exe - <<'EOF'
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          assert not extra, f"data/ holds more than .gitkeep files before the suite: {extra}"
+          EOF
+
+      - name: Split (one unsharded collection on this runner, then this shard's files)
+        run: |
+          set -o pipefail
+          # The collection's stdout is the split's input; on a failure its
+          # end is printed, where pytest names what it could not collect.
+          .venv/Scripts/python.exe -m pytest tests --collect-only -q -rs -p no:cacheprovider > "$RUNNER_TEMP/collect.txt" || { tail -n 120 "$RUNNER_TEMP/collect.txt"; exit 1; }
+          .venv/Scripts/python.exe scripts/ci_shard.py split --shards 4 --index "${{ matrix.shard }}" --collected "$RUNNER_TEMP/collect.txt" --json "$RUNNER_TEMP/shard-${{ matrix.shard }}.json" --files "$RUNNER_TEMP/shard-files.txt"
+
+      - name: Suite (this shard's files)
+        run: |
+          set -o pipefail
+          mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
+          .venv/Scripts/python.exe -m pytest "${files[@]}" -q -p no:cacheprovider -rfE 2>&1 | tee "$RUNNER_TEMP/suite.txt"
+
+      - name: Shard counts (the outcomes must sum to this shard's expected count)
+        if: always()
+        run: |
+          .venv/Scripts/python.exe scripts/ci_shard.py check --json "$RUNNER_TEMP/shard-${{ matrix.shard }}.json" --output "$RUNNER_TEMP/suite.txt" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep this shard's counts for the total (one day)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-windows-venv-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-${{ matrix.shard }}.json
+          retention-days: 1
+
+      - name: data/ and worktree sentinels (after the suite)
+        if: always()
+        run: |
+          .venv/Scripts/python.exe - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          status = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                  text=True, encoding="utf-8", check=True).stdout
+          print("git status --porcelain:", repr(status))
+          assert not extra, f"the suite left files in data/: {extra}"
+          assert status == "", f"the suite changed the worktree:\n{status}"
+          EOF
+
+  suite-windows-venv-total:
+    name: suite (windows-latest, venv, the shards' total)
+    needs: suite-windows-venv
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The shards' counts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: suite-windows-venv-shard-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+
+      - name: The shards' sum against the unsharded count
+        if: always()
+        run: |
+          python3 scripts/ci_shard.py total --shards 4 --dir "$RUNNER_TEMP/shards" --summary "$GITHUB_STEP_SUMMARY"
+
+
+  # W3b (run/specs/W3b.md D12): the same suite with every store on Postgres.
+  # A service container is job-level and Linux-only, so this is its own job
+  # on ubuntu. Since the operator's Amendment 6 (16 November, clause 6) it
+  # runs where the plan job says: at a close, on a dispatch, and on a push
+  # that changed a store file; on any other push it is skipped by name, and
+  # the close covers it. The image's initdb runs en_US.utf8, the
+  # deployment's collation, so a text order the DDL's COLLATE "C" did not
+  # hold would sort linguistically here; tests/test_w3b_parity.py's P11
+  # cases are what turn that into a failure.
+  # tests/conftest.py maps every store path to a schema in the test database
+  # (its name must end in _test) and skips the SQLite-only modules by name,
+  # printing how many.
+  suite-postgres:
+    name: suite (ubuntu-latest, postgres)
+    needs: plan
+    if: needs.plan.outputs.postgres == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: nexus_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nexus_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      NEXUS_TEST_STORE: postgres
+      NEXUS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nexus_test
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: The database answers
+        run: |
+          python - <<'EOF'
+          import os, psycopg
+          with psycopg.connect(os.environ["NEXUS_TEST_DATABASE_URL"], autocommit=True) as c:
+              print(c.execute("SELECT version()").fetchone()[0])
+              print("datcollate:", c.execute("SELECT datcollate FROM pg_database WHERE datname = current_database()").fetchone()[0])
+              print("extra_float_digits:", c.execute("SHOW extra_float_digits").fetchone()[0])
+          EOF
+
+      - name: The client tools (the hosted backup's tests need them; W3b part 5)
+        run: |
+          # tests/test_w3b_backup.py skips by name without pg_dump and
+          # pg_restore on PATH; on this job that would hide the hosted
+          # backup's tests, so their absence fails here, named.
+          pg_dump --version
+          pg_restore --version
+          createdb --version
+
+      - name: data/ sentinel (before the suite)
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          assert not extra, f"data/ holds more than .gitkeep files before the suite: {extra}"
+          EOF
+
+      - name: Full suite on Postgres
+        run: |
+          set -o pipefail
+          python -m pytest tests -q -p no:cacheprovider -rfE 2>&1 | tee "$RUNNER_TEMP/suite.txt"
+
+      - name: Suite counts
+        if: always()
+        run: |
+          line="$(tail -n 1 "$RUNNER_TEMP/suite.txt" 2>/dev/null || echo 'no suite output')"
+          fixture="$(grep -E 'W3b Postgres fixture: [0-9]+ test' "$RUNNER_TEMP/suite.txt" | head -n 1 || true)"
+          echo "suite (ubuntu-latest, postgres, python 3.11): $line"
+          echo "$fixture"
+          {
+            echo "### suite on ubuntu-latest, postgres"
+            echo
+            echo '```'
+            echo "$line"
+            echo "$fixture"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: data/ and worktree sentinels (after the suite)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          status = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                  text=True, encoding="utf-8", check=True).stdout
+          print("git status --porcelain:", repr(status))
+          assert not extra, f"the suite left files in data/: {extra}"
+          assert status == "", f"the suite changed the worktree:\n{status}"
+          EOF
+
+  # W4 part 4 (run/specs/W4.md D20 to D23): the simulated UAT. It runs
+  # scripts/uat_simulate.py and no pytest (C12: no job but the shards runs
+  # pytest on windows), on the suite's staging expression: ubuntu and windows
+  # on every push, macos too on dispatch and at a head commit marked
+  # [ci full]. The verdict lines are the script's own (PASS, FAIL and NOT RUN
+  # per step, `uat-simulate:` lines at the end), copied into the step summary.
+  # The report is written at its default path, reports/uat_simulation_<the
+  # platform>.md, which .gitignore ignores (D22): the worktree sentinel after
+  # the run shows it left nothing, and the report is kept as an artifact, a
+  # day, three on dispatch or at [ci full]. Its sections run on SQLite here;
+  # the next job runs the hosted one on Postgres.
+  uat-simulate:
+    name: uat-simulate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON((github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: data/ sentinel (before the simulation)
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          assert not extra, f"data/ holds more than .gitkeep files before the simulation: {extra}"
+          EOF
+
+      - name: The simulated UAT
+        run: |
+          set -o pipefail
+          python scripts/uat_simulate.py 2>&1 | tee "$RUNNER_TEMP/uat.txt"
+
+      - name: The simulation's own summary lines
+        if: always()
+        run: |
+          {
+            echo "### uat-simulate on ${{ matrix.os }}"
+            echo
+            echo '```'
+            grep -E "^(FAIL|NOT RUN|uat-simulate:)" "$RUNNER_TEMP/uat.txt" 2>/dev/null || echo "no output from the simulation"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report (a day; three on dispatch or at [ci full])
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-simulation-${{ matrix.os }}
+          path: reports/uat_simulation_*.md
+          retention-days: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) && 3 || 1 }}
+
+      - name: data/ and worktree sentinels (after the simulation)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          status = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                  text=True, encoding="utf-8", check=True).stdout
+          print("git status --porcelain:", repr(status))
+          assert not extra, f"the simulation left files in data/: {extra}"
+          assert status == "", f"the simulation changed the worktree:\n{status}"
+          EOF
+
+  # The simulated UAT's hosted section on Postgres (D21, D23). A service
+  # container is job-level and Linux-only, so this is its own job, on ubuntu
+  # on every push, beside the suite-postgres job's service word for word,
+  # with the client tools. The script makes the three testers' databases
+  # with deploy/postgres-init.sh as the service's superuser, under names of
+  # this run's own, and drops them at the end, showing none is left. The
+  # superuser URL is this job's throwaway service's, from the job's
+  # environment to the script's --database-url; the script never shows it.
+  uat-simulate-postgres:
+    name: uat-simulate (ubuntu-latest, postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: nexus_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nexus_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      UAT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nexus_test
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: The client tools (the init script runs psql; their absence fails here, named)
+        run: |
+          psql --version
+          pg_dump --version
+          pg_restore --version
+          createdb --version
+
+      - name: data/ sentinel (before the simulation)
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          assert not extra, f"data/ holds more than .gitkeep files before the simulation: {extra}"
+          EOF
+
+      - name: The simulated UAT's hosted section, the testers on Postgres
+        run: |
+          set -o pipefail
+          python scripts/uat_simulate.py --sections hosted --database-url "$UAT_DATABASE_URL" 2>&1 | tee "$RUNNER_TEMP/uat.txt"
+
+      - name: The simulation's own summary lines
+        if: always()
+        run: |
+          {
+            echo "### uat-simulate on ubuntu-latest, postgres (the hosted section)"
+            echo
+            echo '```'
+            grep -E "^(FAIL|NOT RUN|uat-simulate:)" "$RUNNER_TEMP/uat.txt" 2>/dev/null || echo "no output from the simulation"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report (a day; three on dispatch or at [ci full])
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-simulation-postgres
+          path: reports/uat_simulation_*.md
+          retention-days: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ci full]')) && 3 || 1 }}
+
+      - name: data/ and worktree sentinels (after the simulation)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          files = sorted(p.as_posix() for p in Path("data").rglob("*") if p.is_file())
+          extra = [f for f in files if Path(f).name != ".gitkeep"]
+          print("data/ files:", files)
+          status = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                  text=True, encoding="utf-8", check=True).stdout
+          print("git status --porcelain:", repr(status))
+          assert not extra, f"the simulation left files in data/: {extra}"
+          assert status == "", f"the simulation changed the worktree:\n{status}"
+          EOF

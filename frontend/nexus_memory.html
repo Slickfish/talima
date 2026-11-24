@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS — Memory Column</title>
+<link href="/vendor/fonts/fonts.css" rel="stylesheet">
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#01020a; color:#fff; font-family:'Space Mono', monospace; }
+  #canvas { position:fixed; inset:0; cursor:grab; }
+  #canvas:active { cursor:grabbing; }
+
+  /* SCANLINE OVERLAY */
+  body::before {
+    content:'';
+    position:fixed; inset:0;
+    background:repeating-linear-gradient(0deg,
+      transparent, transparent 3px,
+      rgba(0,0,0,0.06) 3px, rgba(0,0,0,0.06) 4px);
+    pointer-events:none; z-index:50;
+  }
+
+  /* VIGNETTE */
+  body::after {
+    content:'';
+    position:fixed; inset:0;
+    background:radial-gradient(ellipse at center,
+      transparent 30%,
+      rgba(1,2,10,0.6) 100%);
+    pointer-events:none; z-index:51;
+  }
+
+  /* UI OVERLAY */
+  .ui { position:fixed; inset:0; pointer-events:none; z-index:100; }
+
+  .header {
+    position:fixed; top:0; left:0; right:0;
+    padding:28px 40px;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    background:linear-gradient(to bottom, rgba(1,2,10,0.95), transparent);
+  }
+  .logo {
+    font-family:'Syne', sans-serif; font-weight:800;
+    font-size:20px; letter-spacing:0.28em;
+    color:#00e5ff; text-transform:uppercase;
+    text-shadow:
+      0 0 20px rgba(0,229,255,0.7),
+      0 0 50px rgba(0,229,255,0.3),
+      0 0 100px rgba(0,229,255,0.1);
+  }
+  .logo span {
+    color:rgba(0,229,255,0.4); font-weight:300; font-size:10px;
+    margin-left:14px; letter-spacing:0.15em;
+  }
+  .header-right {
+    font-family:'Space Mono', monospace; font-size:9px;
+    color:rgba(0,229,255,0.4); letter-spacing:0.18em;
+    text-align:right; line-height:2;
+  }
+  .header-right b { color:rgba(0,229,255,0.85); font-weight:700; }
+
+  /* LAYER LABELS */
+  .layer-label {
+    position:fixed; right:48px;
+    font-family:'Space Mono', monospace; font-size:9px;
+    letter-spacing:0.25em; text-transform:uppercase;
+    display:flex; align-items:center; gap:14px;
+    opacity:0.7; transition:opacity 0.4s;
+  }
+  .layer-label::before {
+    content:''; display:block; width:28px; height:1px;
+  }
+  .layer-hippocampus { top:25%; color:#00e5ff; }
+  .layer-hippocampus::before { background:#00e5ff; box-shadow:0 0 12px #00e5ff; }
+  .layer-neocortex { top:52%; color:#a78bfa; }
+  .layer-neocortex::before { background:#a78bfa; box-shadow:0 0 12px #a78bfa; }
+  .layer-archive { top:80%; color:rgba(140,180,255,0.6); }
+  .layer-archive::before { background:rgba(140,180,255,0.5); }
+
+  /* DEPTH SCALE */
+  .depth-bar {
+    position:fixed; left:48px; top:18%; bottom:18%;
+    width:2px;
+    background:linear-gradient(to bottom,
+      rgba(0,229,255,0.75) 0%,
+      rgba(167,139,250,0.65) 50%,
+      rgba(80,140,255,0.45) 85%,
+      rgba(40,60,120,0.2) 100%);
+    pointer-events:none;
+    box-shadow: 0 0 12px rgba(0,229,255,0.3);
+  }
+  .depth-bar::before {
+    content:'DEPTH'; position:absolute; top:-22px; left:-22px;
+    font-family:'Space Mono', monospace; font-size:8px;
+    color:rgba(0,229,255,0.35); letter-spacing:0.3em;
+  }
+
+  /* STATUS BAR */
+  .status-bar {
+    position:fixed; bottom:0; left:0; right:0;
+    padding:18px 40px;
+    background:linear-gradient(to top, rgba(1,2,10,0.95), transparent);
+    display:flex; align-items:center; gap:34px;
+    font-family:'Space Mono', monospace; font-size:9px;
+    color:rgba(255,255,255,0.25); letter-spacing:0.18em;
+  }
+  .status-item { display:flex; align-items:center; gap:9px; }
+  .status-dot {
+    width:6px; height:6px; border-radius:50%;
+    background:#22c55e; box-shadow:0 0 10px #22c55e;
+    animation:statusPulse 2.5s infinite;
+  }
+  @keyframes statusPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+  .status-val { color:rgba(0,229,255,0.7); }
+  .hint { margin-left:auto; opacity:0.5; }
+
+  /* TOOLTIP */
+  #tooltip {
+    position:fixed; pointer-events:none;
+    background:rgba(2,4,15,0.94);
+    border:1px solid rgba(0,229,255,0.25);
+    border-left:2px solid #00e5ff;
+    padding:12px 16px; border-radius:2px;
+    font-family:'Space Mono', monospace; font-size:9px;
+    color:rgba(255,255,255,0.75); line-height:1.9;
+    max-width:240px;
+    opacity:0; transition:opacity 0.18s;
+    z-index:200;
+    backdrop-filter:blur(8px);
+  }
+  #tooltip .t-concept { color:#00e5ff; font-weight:700; font-size:11px; margin-bottom:4px; }
+  #tooltip .t-ep { color:#22c55e; }
+  #tooltip .t-ep.partial { color:#f59e0b; }
+  #tooltip .t-ep.contradicted { color:#ef4444; }
+  #tooltip .t-ep.inferred { color:#a78bfa; }
+  #tooltip .t-ep.unknown { color:#64748b; }
+
+  /* LOADING */
+  #loading {
+    position:fixed; inset:0;
+    background:#01020a;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Syne', sans-serif; font-weight:800;
+    color:#00e5ff; letter-spacing:0.3em; font-size:14px;
+    text-shadow:0 0 20px rgba(0,229,255,0.6);
+    z-index:1000;
+    transition:opacity 0.8s;
+  }
+  #loading.hidden { opacity:0; pointer-events:none; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="loading">INITIALISING COGNITIVE SUBSTRATE</div>
+
+<div class="ui">
+  <div class="header">
+    <div class="logo">NEXUS <span>memory column · v0.1-alpha</span></div>
+    <div class="header-right">
+      <span id="stat-nodes"><b>—</b> nodes</span> ·
+      <span id="stat-edges"><b>—</b> edges</span><br>
+      <span id="stat-archive"><b>—</b> archive blocks</span><br>
+      <span style="color:rgba(0,229,255,0.55)">chain integrity verified</span>
+    </div>
+  </div>
+
+  <div class="layer-label layer-hippocampus">Hippocampus — session</div>
+  <div class="layer-label layer-neocortex">Neocortex — consolidated</div>
+  <div class="layer-label layer-archive">Archive — sealed</div>
+
+  <div class="depth-bar"></div>
+
+  <div class="status-bar">
+    <div class="status-item">
+      <div class="status-dot"></div>
+      <span>substrate <span class="status-val">live</span></span>
+    </div>
+    <div class="status-item">epistemic states <span class="status-val">5</span></div>
+    <div class="status-item">depth <span class="status-val">1000 units</span></div>
+    <div class="status-item">hash <span class="status-val" id="stat-hash">— —</span></div>
+    <div class="hint">drag to orbit · scroll to descend · hover to inspect</div>
+  </div>
+</div>
+
+<div id="tooltip">
+  <div class="t-concept" id="tt-concept">—</div>
+  <div id="tt-ep" class="t-ep">—</div>
+  <div id="tt-meta">—</div>
+</div>
+
+<!-- GSAP (global) — drives Phase 2A live-event animations (vendored, P1/F-07) -->
+<script src="/vendor/gsap.min.js"></script>
+<!-- Three.js + post-processing modules (vendored, P1/F-07) -->
+<script type="importmap">
+{
+  "imports": {
+    "three":                "/vendor/three/three.module.js",
+    "three/addons/":        "/vendor/three/addons/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer }   from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }       from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }  from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass }       from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass }       from 'three/addons/postprocessing/OutputPass.js';
+
+// ════════════════════════════════════════════════════════════════
+// FIXTURE DATA (replaced by /memory/column in Phase 1C)
+// ════════════════════════════════════════════════════════════════
+
+const SURFACE = [
+  { id:'fastapi',         ep:'known',        confidence:0.85, x:-120, z:  40 },
+  { id:'web_framework',   ep:'known',        confidence:0.90, x: -60, z: -80 },
+  { id:'interval_train',  ep:'partial',      confidence:0.60, x:  80, z:  60 },
+  { id:'VO2_max',         ep:'known',        confidence:0.78, x: 140, z:-100 },
+  { id:'lactate_thresh',  ep:'inferred',     confidence:0.55, x: 200, z:  20 },
+  { id:'capabilities',    ep:'partial',      confidence:0.45, x: -40, z: 120 },
+  { id:'compaction',      ep:'known',        confidence:0.88, x:-180, z: -60 },
+  { id:'archive',         ep:'known',        confidence:0.92, x:-200, z:  80 },
+  { id:'contradiction',   ep:'contradicted', confidence:0.71, x:  60, z:-140 },
+  { id:'hebbian',         ep:'inferred',     confidence:0.62, x: 160, z: 100 },
+  { id:'KAIROS',          ep:'known',        confidence:0.95, x:-100, z:-120 },
+  { id:'consolidation',   ep:'partial',      confidence:0.66, x:  20, z: -20 },
+  { id:'prediction_error',ep:'inferred',     confidence:0.58, x: 100, z: 160 },
+];
+
+const NEOCORTEX = [
+  // Tier 0 — most consolidated
+  { id:'exercise',        ep:'known',   confidence:0.92, x: -90, z:  50 },
+  { id:'python',          ep:'known',   confidence:0.95, x:  50, z: -70 },
+  { id:'memory',          ep:'known',   confidence:0.94, x:-160, z: -40 },
+  { id:'cognition',       ep:'known',   confidence:0.91, x: -40, z:-160 },
+  { id:'cat_is_a_mammal', ep:'known',   confidence:0.98, x:-200, z:  90 },
+  { id:'computation',     ep:'known',   confidence:0.89, x: 200, z:  60 },
+  // Tier 1 — well consolidated
+  { id:'persistence',     ep:'known',   confidence:0.86, x:  70, z: 100 },
+  { id:'epistemology',    ep:'partial', confidence:0.72, x: 130, z:  30 },
+  { id:'inference',       ep:'known',   confidence:0.84, x: -120, z: 120 },
+  { id:'health',          ep:'partial', confidence:0.78, x: 180, z: -80 },
+  { id:'consolidation',   ep:'known',   confidence:0.87, x:  10, z:  60 },
+  // Tier 2 — recently promoted
+  { id:'pattern',         ep:'partial', confidence:0.68, x: -70, z: -100 },
+  { id:'concept_drift',   ep:'inferred',confidence:0.62, x: 100, z: 160 },
+  { id:'fingerprint',     ep:'known',   confidence:0.81, x:-110, z:-200 },
+];
+
+const ARCHIVE = [
+  { hash:'a3f9c2d', complexity:0.55, x:-280, nodes:11, edges:24 },
+  { hash:'b7e1a4f', complexity:0.72, x:-100, nodes:14, edges:38 },
+  { hash:'c9d2b5e', complexity:0.85, x: 100, nodes:18, edges:62 },
+  { hash:'d1e3f7a', complexity:0.92, x: 280, nodes:22, edges:89 },
+];
+
+// ════════════════════════════════════════════════════════════════
+// COLOUR PALETTE — exact match to NEXUS aesthetic
+// ════════════════════════════════════════════════════════════════
+
+const EP_COLOR = {
+  known:        new THREE.Color('#00e5ff'),
+  partial:      new THREE.Color('#f59e0b'),
+  contradicted: new THREE.Color('#ef4444'),
+  inferred:     new THREE.Color('#a78bfa'),
+  unknown:      new THREE.Color('#475569'),
+};
+
+// ════════════════════════════════════════════════════════════════
+// SCENE SETUP
+// ════════════════════════════════════════════════════════════════
+
+let W = window.innerWidth, H = window.innerHeight;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#01020a');
+scene.fog = new THREE.FogExp2(0x04081a, 0.0009);
+
+const camera = new THREE.PerspectiveCamera(48, W/H, 0.1, 5000);
+camera.position.set(0, 50, 950);
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: document.getElementById('canvas'),
+  antialias: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(W, H);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+// ════════════════════════════════════════════════════════════════
+// POST-PROCESSING PIPELINE
+// ════════════════════════════════════════════════════════════════
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+// UnrealBloomPass — the cyan should bleed
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(W, H),
+  1.7,    // strength — bumped for gallery visibility
+  0.7,    // radius — wider bleed
+  0.72    // threshold — more pixels glow
+);
+composer.addPass(bloomPass);
+
+// Custom depth fog pass — exponential darkening below Y=0
+const DepthFogShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    cameraY:  { value: 220 },
+    intensity:{ value: 1.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float cameraY;
+    uniform float intensity;
+    varying vec2 vUv;
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      // Subtle radial darkening at edges
+      vec2 c = vUv - 0.5;
+      float r = length(c) * 1.4;
+      float vignette = 1.0 - r * 0.45;
+      color.rgb *= vignette;
+      // Cool the deep zones, warm the surface
+      float depth = clamp((cameraY + 600.0) / 1200.0, 0.0, 1.0);
+      vec3 tint = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 1.0, 1.0), depth);
+      color.rgb *= tint;
+      gl_FragColor = color;
+    }
+  `,
+};
+const depthFogPass = new ShaderPass(DepthFogShader);
+composer.addPass(depthFogPass);
+
+// Film grain pass
+const GrainShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    time:     { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float time;
+    varying vec2 vUv;
+    float rand(vec2 co){
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      float g = (rand(vUv + time) - 0.5) * 0.04;
+      color.rgb += g;
+      gl_FragColor = color;
+    }
+  `,
+};
+const grainPass = new ShaderPass(GrainShader);
+composer.addPass(grainPass);
+
+composer.addPass(new OutputPass());
+
+// ════════════════════════════════════════════════════════════════
+// LIGHTING
+// ════════════════════════════════════════════════════════════════
+
+scene.add(new THREE.AmbientLight(0x060a18, 0.6));
+
+const surfaceLight = new THREE.PointLight(0x00e5ff, 60, 800, 2);
+surfaceLight.position.set(0, 450, 100);
+scene.add(surfaceLight);
+
+const neoLight = new THREE.PointLight(0xa78bfa, 30, 600, 2);
+neoLight.position.set(80, 0, -80);
+scene.add(neoLight);
+
+const archiveLight = new THREE.PointLight(0x5080ff, 20, 500, 2);
+archiveLight.position.set(0, -640, 0);
+scene.add(archiveLight);
+
+// Cool fill from below the archive
+const baseFill = new THREE.PointLight(0x2040a0, 15, 700, 2);
+baseFill.position.set(0, -900, 0);
+scene.add(baseFill);
+
+// ════════════════════════════════════════════════════════════════
+// FRESNEL RIM-LIGHT SHADER (the node material)
+// ════════════════════════════════════════════════════════════════
+
+const NodeShader = {
+  uniforms: {
+    uColor:      { value: new THREE.Color(0x00e5ff) },
+    uConfidence: { value: 0.8 },
+    uTime:       { value: 0 },
+    uPulse:      { value: 0 },
+  },
+  vertexShader: `
+    varying vec3 vNormal;
+    varying vec3 vViewDir;
+    varying vec3 vPos;
+    void main() {
+      vNormal = normalize(normalMatrix * normal);
+      vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+      vViewDir = normalize(-mvPos.xyz);
+      vPos = position;
+      gl_Position = projectionMatrix * mvPos;
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 uColor;
+    uniform float uConfidence;
+    uniform float uTime;
+    uniform float uPulse;
+    varying vec3 vNormal;
+    varying vec3 vViewDir;
+    varying vec3 vPos;
+    void main() {
+      // Fresnel rim — brightest at silhouette, dark at centre
+      float fresnel = 1.0 - max(0.0, dot(vNormal, vViewDir));
+      fresnel = pow(fresnel, 1.8);
+
+      // Inner dim glow
+      float inner = pow(max(0.0, dot(vNormal, vViewDir)), 2.0) * 0.15;
+
+      // Pulse (used for activation events)
+      float pulse = 1.0 + uPulse * sin(uTime * 8.0) * 0.4;
+
+      // Combined emission
+      vec3 rim = uColor * fresnel * (1.5 + uConfidence * 1.5) * pulse;
+      vec3 core = uColor * inner * uConfidence;
+
+      float alpha = fresnel * 0.95 + inner * 0.4;
+      gl_FragColor = vec4(rim + core, alpha);
+    }
+  `,
+};
+
+function makeNodeMaterial(color, confidence) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor:      { value: color.clone() },
+      uConfidence: { value: confidence },
+      uTime:       { value: 0 },
+      uPulse:      { value: 0 },
+    },
+    vertexShader:   NodeShader.vertexShader,
+    fragmentShader: NodeShader.fragmentShader,
+    transparent: true,
+    blending:    THREE.AdditiveBlending,
+    depthWrite:  false,
+  });
+  return mat;
+}
+
+// ════════════════════════════════════════════════════════════════
+// NODE CONSTRUCTION
+// ════════════════════════════════════════════════════════════════
+
+const allNodes = [];          // for raycasting
+const nodeMaterials = [];     // for uniform updates
+
+function makeNode(data, y, baseRadius) {
+  const color = EP_COLOR[data.ep] || EP_COLOR.unknown;
+  const conf  = data.confidence;
+  const r     = baseRadius * (0.55 + conf * 0.95);
+
+  // Inner core sphere with fresnel material
+  const geo = new THREE.SphereGeometry(r, 32, 24);
+  const mat = makeNodeMaterial(color, conf);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(data.x, y, data.z);
+  mesh.userData = {
+    id:         data.id,
+    ep:         data.ep,
+    confidence: conf,
+    layer:      y > 200 ? 'hippocampus' : y > -300 ? 'neocortex' : 'archive',
+    fire_count: Math.floor(7 + conf * 25),
+  };
+  scene.add(mesh);
+  allNodes.push(mesh);
+  nodeMaterials.push(mat);
+
+  // Outer glow sprite — gives the bloom something to work with
+  const spriteMat = new THREE.SpriteMaterial({
+    map:         makeGlowTexture(color),
+    color:       color,
+    blending:    THREE.AdditiveBlending,
+    transparent: true,
+    opacity:     0.45 + conf * 0.35,
+    depthWrite:  false,
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.setScalar(r * 10 + conf * 30);
+  sprite.position.copy(mesh.position);
+  scene.add(sprite);
+
+  return mesh;
+}
+
+// Radial glow texture for sprite halos
+function makeGlowTexture(color) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  const r = Math.floor(color.r * 255);
+  const gr = Math.floor(color.g * 255);
+  const b = Math.floor(color.b * 255);
+  g.addColorStop(0,   `rgba(${r},${gr},${b},1.0)`);
+  g.addColorStop(0.3, `rgba(${r},${gr},${b},0.4)`);
+  g.addColorStop(0.7, `rgba(${r},${gr},${b},0.05)`);
+  g.addColorStop(1,   `rgba(${r},${gr},${b},0)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Build surface layer
+SURFACE.forEach(n => {
+  const y = 380 + (Math.random() - 0.5) * 80;
+  makeNode(n, y, 9);
+});
+
+// Build neocortex layer
+NEOCORTEX.forEach((n, i) => {
+  // Distribute across a wider Y band so the layer has depth
+  const y = -50 + (Math.random() - 0.5) * 180;
+  makeNode(n, y, 10);
+});
+
+// ── HORIZON SEPARATORS ────────────────────────────────────────
+function makeSeparator(y, color, opacity) {
+  const geo = new THREE.RingGeometry(280, 320, 64);
+  const mat = new THREE.MeshBasicMaterial({
+    color: color,
+    transparent: true,
+    opacity: opacity,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(geo, mat);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = y;
+  scene.add(ring);
+}
+
+makeSeparator(220,  0x00e5ff, 0.35);
+makeSeparator(-180, 0xa78bfa, 0.25);
+makeSeparator(-500, 0x4080ff, 0.20);
+
+// ════════════════════════════════════════════════════════════════
+// EDGE LINES (between nodes within a layer)
+// ════════════════════════════════════════════════════════════════
+
+function makeEdgeLine(p1, p2, color, opacity) {
+  const points = [];
+  const segments = 16;
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const x = p1.x + (p2.x - p1.x) * t;
+    const y = p1.y + (p2.y - p1.y) * t + Math.sin(t * Math.PI) * 8;
+    const z = p1.z + (p2.z - p1.z) * t;
+    points.push(new THREE.Vector3(x, y, z));
+  }
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = new THREE.LineBasicMaterial({
+    color: color,
+    transparent: true,
+    opacity: opacity,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  return new THREE.Line(geo, mat);
+}
+
+const surfNodes = allNodes.filter(n => n.position.y > 200);
+const neoNodes  = allNodes.filter(n => n.position.y > -300 && n.position.y <= 200);
+
+// Surface edges — denser, cyan
+const surfPairs = [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[4,9],[0,6],
+  [6,7],[7,1],[10,3],[10,8],[11,2],[12,5],[8,9],[1,11],
+];
+surfPairs.forEach(([i,j]) => {
+  if (surfNodes[i] && surfNodes[j]) {
+    scene.add(makeEdgeLine(surfNodes[i].position, surfNodes[j].position, 0x00e5ff, 0.18));
+  }
+});
+
+// Neocortex edges — sparser, violet
+const neoPairs = [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[4,7],
+  [0,8],[8,9],[9,10],[10,11],[11,12],[12,13],[1,8],
+  [3,11],[5,9],[7,13],[2,12],[6,10],[4,9],
+];
+neoPairs.forEach(([i,j]) => {
+  if (neoNodes[i] && neoNodes[j]) {
+    scene.add(makeEdgeLine(neoNodes[i].position, neoNodes[j].position, 0xa78bfa, 0.22));
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+// PROCEDURAL THREADS — vertical luminous tubes
+// connecting same concept across all three layers
+// ════════════════════════════════════════════════════════════════
+
+const ThreadShader = {
+  uniforms: {
+    uTime:  { value: 0 },
+    uPulse: { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    uniform float uPulse;
+    varying vec2 vUv;
+    void main() {
+      // Vertical gradient: cyan → violet → cold blue
+      vec3 cyan   = vec3(0.0, 0.9, 1.0);
+      vec3 violet = vec3(0.65, 0.55, 0.98);
+      vec3 cold   = vec3(0.31, 0.5, 1.0);
+      vec3 col;
+      if (vUv.y < 0.5) {
+        col = mix(cold, violet, vUv.y * 2.0);
+      } else {
+        col = mix(violet, cyan, (vUv.y - 0.5) * 2.0);
+      }
+
+      // Travelling pulse — bright spot moving along length
+      float pulsePos = mod(uTime * 0.15, 1.4) - 0.2;
+      float dist = abs(vUv.y - pulsePos);
+      float pulse = exp(-dist * 18.0) * (0.6 + uPulse);
+
+      // Edge fade
+      float edge = 1.0 - abs(vUv.x - 0.5) * 2.0;
+      float intensity = 0.25 + pulse;
+
+      gl_FragColor = vec4(col * intensity, edge * (0.4 + pulse * 0.6));
+    }
+  `,
+};
+
+function makeThread(surfNode, neoNode) {
+  if (!surfNode || !neoNode) return;
+  const pts = [];
+  const s = surfNode.position;
+  const n = neoNode.position;
+
+  // CatmullRom spline through 7 points for graceful curve
+  pts.push(s.clone());
+  pts.push(new THREE.Vector3(
+    s.x * 0.75 + n.x * 0.25,
+    s.y * 0.65 + n.y * 0.35,
+    s.z * 0.75 + n.z * 0.25 - 10
+  ));
+  pts.push(new THREE.Vector3(
+    s.x * 0.5 + n.x * 0.5,
+    s.y * 0.4 + n.y * 0.6,
+    s.z * 0.5 + n.z * 0.5
+  ));
+  pts.push(n.clone());
+  pts.push(new THREE.Vector3(n.x * 0.85, -250, n.z * 0.85));
+  pts.push(new THREE.Vector3(n.x * 0.7, -500, n.z * 0.7));
+  pts.push(new THREE.Vector3(n.x * 0.5, -650, n.z * 0.5));
+
+  const curve = new THREE.CatmullRomCurve3(pts);
+
+  // TubeGeometry with custom shader
+  const geo = new THREE.TubeGeometry(curve, 80, 1.4, 8, false);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:  { value: 0 },
+      uPulse: { value: 0 },
+    },
+    vertexShader: ThreadShader.vertexShader,
+    fragmentShader: ThreadShader.fragmentShader,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const tube = new THREE.Mesh(geo, mat);
+  scene.add(tube);
+  threadMaterials.push(mat);
+}
+
+const threadMaterials = [];
+
+// Draw a handful of threads (more if conceptual relationships warrant)
+if (surfNodes[0] && neoNodes[0]) makeThread(surfNodes[0], neoNodes[0]);
+if (surfNodes[2] && neoNodes[4]) makeThread(surfNodes[2], neoNodes[4]);
+if (surfNodes[6] && neoNodes[3]) makeThread(surfNodes[6], neoNodes[3]);
+if (surfNodes[10] && neoNodes[7]) makeThread(surfNodes[10], neoNodes[7]);
+if (surfNodes[4] && neoNodes[2]) makeThread(surfNodes[4], neoNodes[2]);
+
+// ════════════════════════════════════════════════════════════════
+// ARCHIVE CRYSTALS — frozen fingerprint polyhedra
+// ════════════════════════════════════════════════════════════════
+
+const CrystalShader = {
+  uniforms: {
+    uTime: { value: 0 },
+  },
+  vertexShader: `
+    varying vec3 vNormal;
+    varying vec3 vViewDir;
+    void main() {
+      vNormal = normalize(normalMatrix * normal);
+      vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+      vViewDir = normalize(-mvPos.xyz);
+      gl_Position = projectionMatrix * mvPos;
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    varying vec3 vNormal;
+    varying vec3 vViewDir;
+    void main() {
+      float fresnel = 1.0 - max(0.0, dot(vNormal, vViewDir));
+      fresnel = pow(fresnel, 1.4);
+
+      // Crystalline blue: cold cyan rim, deep indigo interior
+      vec3 rimColor    = vec3(0.4, 0.7, 1.0);
+      vec3 innerColor  = vec3(0.08, 0.15, 0.4);
+
+      // Subtle facet shimmer
+      float shimmer = sin(vNormal.x * 8.0 + uTime * 0.3) *
+                      sin(vNormal.y * 7.0 + uTime * 0.4) *
+                      sin(vNormal.z * 9.0 + uTime * 0.2);
+      shimmer = 0.5 + shimmer * 0.5;
+
+      vec3 col = mix(innerColor, rimColor, fresnel) * (0.6 + shimmer * 0.6);
+
+      // Inner glow
+      float core = pow(max(0.0, dot(vNormal, vViewDir)), 4.0);
+      col += vec3(0.6, 0.85, 1.0) * core * 0.3;
+
+      gl_FragColor = vec4(col, 0.78);
+    }
+  `,
+};
+
+const crystalMaterials = [];
+
+function makeCrystal(data) {
+  const group = new THREE.Group();
+  group.position.set(data.x, -640, 0);
+
+  const c = data.complexity;
+  // Icosahedron with subdivision proportional to complexity
+  const detail = Math.floor(c * 2);
+  const geo = new THREE.IcosahedronGeometry(70 * (0.6 + c * 0.6), detail);
+
+  // Custom shader for crystal
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 } },
+    vertexShader:   CrystalShader.vertexShader,
+    fragmentShader: CrystalShader.fragmentShader,
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: true,
+  });
+  const crystal = new THREE.Mesh(geo, mat);
+  group.add(crystal);
+  crystalMaterials.push(mat);
+
+  // Wireframe overlay — barely visible
+  const wireMat = new THREE.LineBasicMaterial({
+    color: 0x90b8ff,
+    transparent: true,
+    opacity: 0.45,
+  });
+  const wireGeo = new THREE.WireframeGeometry(geo);
+  group.add(new THREE.LineSegments(wireGeo, wireMat));
+
+  // Inner luminous core
+  const coreGeo = new THREE.SphereGeometry(16 + c * 14, 16, 12);
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: 0xa0d0ff,
+    transparent: true,
+    opacity: 0.35,
+    blending: THREE.AdditiveBlending,
+  });
+  group.add(new THREE.Mesh(coreGeo, coreMat));
+
+  // Halo sprite
+  const haloMat = new THREE.SpriteMaterial({
+    map: makeGlowTexture(new THREE.Color(0x5090ff)),
+    color: 0x5090ff,
+    transparent: true,
+    opacity: 0.4,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const halo = new THREE.Sprite(haloMat);
+  halo.scale.setScalar(180 * c + 80);
+  group.add(halo);
+
+  scene.add(group);
+  return group;
+}
+
+const crystals = ARCHIVE.map(makeCrystal);
+
+// Chain lines between crystals
+for (let i = 0; i < crystals.length - 1; i++) {
+  const a = crystals[i].position.clone();
+  const b = crystals[i+1].position.clone();
+  const points = [];
+  const steps = 24;
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    points.push(new THREE.Vector3(
+      a.x + (b.x - a.x) * t,
+      a.y + Math.sin(t * Math.PI) * 18,
+      a.z + (b.z - a.z) * t
+    ));
+  }
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x4080c0,
+    transparent: true,
+    opacity: 0.55,
+    blending: THREE.AdditiveBlending,
+  });
+  scene.add(new THREE.Line(geo, mat));
+}
+
+// ════════════════════════════════════════════════════════════════
+// PARTICLE FIELD — ambient density
+// ════════════════════════════════════════════════════════════════
+
+function buildParticles() {
+  const count = 12000;
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  const colors    = new Float32Array(count * 3);
+  const sizes     = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    // Distribute through the full vertical column
+    const y = THREE.MathUtils.randFloatSpread(1400) - 100;
+    positions[i*3]   = THREE.MathUtils.randFloatSpread(900);
+    positions[i*3+1] = y;
+    positions[i*3+2] = THREE.MathUtils.randFloatSpread(600);
+
+    // Colour shifts with depth
+    const t = (y + 700) / 1400;
+    if (t > 0.6) {
+      // Surface — cyan
+      colors[i*3]   = 0.0;
+      colors[i*3+1] = 0.8 + Math.random() * 0.2;
+      colors[i*3+2] = 1.0;
+    } else if (t > 0.3) {
+      // Mid — violet
+      colors[i*3]   = 0.5 + Math.random() * 0.2;
+      colors[i*3+1] = 0.45;
+      colors[i*3+2] = 0.95;
+    } else {
+      // Deep — cold blue, very dim
+      colors[i*3]   = 0.2;
+      colors[i*3+1] = 0.3;
+      colors[i*3+2] = 0.7;
+    }
+    sizes[i] = Math.random() * 1.5 + 0.3;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('size',     new THREE.BufferAttribute(sizes, 1));
+
+  const mat = new THREE.PointsMaterial({
+    size: 1.3,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.55,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true,
+    depthWrite: false,
+  });
+
+  scene.add(new THREE.Points(geo, mat));
+}
+
+buildParticles();
+
+// ════════════════════════════════════════════════════════════════
+// ORBIT CONTROLS — custom for vertical descent + horizontal orbit
+// ════════════════════════════════════════════════════════════════
+
+let isDragging = false;
+let prevMouse = { x: 0, y: 0 };
+let targetTheta = 0.2, theta = 0.2;
+let targetPhi   = 0.25, phi = 0.25;
+let targetY = 50, cameraY = 50;
+let radius = 950;
+let autoRotate = true;
+let autoRotateTimer = 0;
+
+const canvas = document.getElementById('canvas');
+
+canvas.addEventListener('pointerdown', e => {
+  isDragging = true;
+  autoRotate = false;
+  autoRotateTimer = 0;
+  prevMouse = { x: e.clientX, y: e.clientY };
+});
+canvas.addEventListener('pointermove', e => {
+  if (isDragging) {
+    const dx = e.clientX - prevMouse.x;
+    const dy = e.clientY - prevMouse.y;
+    targetTheta -= dx * 0.005;
+    targetPhi = Math.max(0.05, Math.min(1.3, targetPhi - dy * 0.004));
+    prevMouse = { x: e.clientX, y: e.clientY };
+  } else {
+    checkHover(e);
+  }
+});
+canvas.addEventListener('pointerup',     () => isDragging = false);
+canvas.addEventListener('pointerleave',  () => isDragging = false);
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  targetY -= e.deltaY * 0.6;
+  targetY = Math.max(-900, Math.min(800, targetY));
+  autoRotate = false;
+  autoRotateTimer = 0;
+}, { passive: false });
+
+// ════════════════════════════════════════════════════════════════
+// RAYCASTING / HOVER
+// ════════════════════════════════════════════════════════════════
+
+const raycaster = new THREE.Raycaster();
+const ndc       = new THREE.Vector2();
+const tooltip   = document.getElementById('tooltip');
+
+function checkHover(e) {
+  ndc.x =  (e.clientX / W) * 2 - 1;
+  ndc.y = -(e.clientY / H) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(allNodes);
+  if (hits.length > 0) {
+    const d = hits[0].object.userData;
+    document.getElementById('tt-concept').textContent = d.id;
+    const epEl = document.getElementById('tt-ep');
+    epEl.textContent  = `${d.ep} · evidential weight ${((d.evidential_weight ?? d.confidence) * 100).toFixed(0)}%`;
+    epEl.className    = `t-ep ${d.ep}`;
+    document.getElementById('tt-meta').textContent =
+      d.layer === 'hippocampus' ? `session memory · fc=${d.fire_count}` :
+      d.layer === 'neocortex'   ? `consolidated · tier 2 · fc=${d.fire_count}` :
+                                  `sealed in archive`;
+    tooltip.style.left = (e.clientX + 18) + 'px';
+    tooltip.style.top  = (e.clientY - 10) + 'px';
+    tooltip.style.opacity = '1';
+    canvas.style.cursor = 'pointer';
+  } else {
+    tooltip.style.opacity = '0';
+    canvas.style.cursor = isDragging ? 'grabbing' : 'grab';
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// HEADER STATS POPULATION
+// ════════════════════════════════════════════════════════════════
+
+document.getElementById('stat-nodes').innerHTML =
+  `<b>${SURFACE.length + NEOCORTEX.length}</b> nodes`;
+document.getElementById('stat-edges').innerHTML =
+  `<b>${surfPairs.length + neoPairs.length}</b> edges`;
+document.getElementById('stat-archive').innerHTML =
+  `<b>${ARCHIVE.length}</b> archive blocks`;
+document.getElementById('stat-hash').textContent =
+  ARCHIVE[ARCHIVE.length - 1].hash + '…';
+
+// ════════════════════════════════════════════════════════════════
+// ANIMATION LOOP
+// ════════════════════════════════════════════════════════════════
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  // Auto-rotate resumption after idle
+  if (!isDragging) {
+    autoRotateTimer += 0.016;
+    if (autoRotateTimer > 4) autoRotate = true;
+  }
+  if (autoRotate) targetTheta += 0.0008;
+
+  // Smooth camera interpolation
+  theta   += (targetTheta - theta)   * 0.06;
+  phi     += (targetPhi   - phi)     * 0.08;
+  cameraY += (targetY     - cameraY) * 0.07;
+
+  // Spherical to cartesian
+  camera.position.x = radius * Math.sin(theta) * Math.cos(phi);
+  camera.position.z = radius * Math.cos(theta) * Math.cos(phi);
+  camera.position.y = cameraY + radius * Math.sin(phi) * 0.25;
+  camera.lookAt(0, cameraY * 0.3, 0);
+
+  // Update all node uniforms
+  nodeMaterials.forEach(mat => {
+    mat.uniforms.uTime.value  = t;
+    // Decay pulse
+    mat.uniforms.uPulse.value *= 0.95;
+  });
+
+  // Subtle surface node breathing
+  allNodes.forEach((n, i) => {
+    if (n.position.y > 200) {
+      n.position.y = (n.userData._baseY = n.userData._baseY || n.position.y) +
+                     Math.sin(t * 0.7 + i * 0.5) * 1.5;
+    }
+  });
+
+  // Crystals rotate
+  crystals.forEach((c, i) => {
+    c.rotation.y = t * 0.08 + i * 1.3;
+    c.rotation.x = Math.sin(t * 0.05 + i) * 0.18;
+  });
+  crystalMaterials.forEach(m => { m.uniforms.uTime.value = t; });
+
+  // Thread pulse
+  threadMaterials.forEach(m => {
+    m.uniforms.uTime.value = t;
+  });
+
+  // Surface light flicker
+  surfaceLight.intensity = 60 + Math.sin(t * 0.6) * 10;
+  neoLight.intensity     = 30 + Math.sin(t * 0.4 + 1) * 5;
+
+  // Depth fog cameraY tracking
+  depthFogPass.uniforms.cameraY.value = cameraY;
+
+  // Grain animation
+  grainPass.uniforms.time.value = t;
+
+  composer.render();
+}
+
+// ════════════════════════════════════════════════════════════════
+// RESIZE
+// ════════════════════════════════════════════════════════════════
+
+window.addEventListener('resize', () => {
+  W = window.innerWidth; H = window.innerHeight;
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+  renderer.setSize(W, H);
+  composer.setSize(W, H);
+  bloomPass.setSize(W, H);
+});
+
+// ════════════════════════════════════════════════════════════════
+// BOOT
+// ════════════════════════════════════════════════════════════════
+
+setTimeout(() => {
+  document.getElementById('loading').classList.add('hidden');
+  setTimeout(() => document.getElementById('loading').remove(), 800);
+}, 600);
+
+animate();
+
+// ════════════════════════════════════════════════════════════════
+// PHASE 2A — LIVE SSE ANIMATION LAYER
+// Every animation here MUST be triggered by a real backend event.
+// No timers. No fake pulses. The piece tells the truth about the
+// system's actual cognitive activity.
+//
+// Live events this backend actually emits (verified against backend/loop):
+//   triples_injected · triples_extracted · prediction_error · hebbian
+// Dormant handlers (kept as foundation; fire if/when the backend starts
+// emitting these): kairos_consolidation · chain_appended
+// ════════════════════════════════════════════════════════════════
+
+let _eventCursor = 0;
+let _eventPollActive = true;
+
+// ── NODE LOOKUP ──────────────────────────────────────────────
+// Given a concept ID from an SSE event, find the matching 3D mesh.
+// Returns null if not present — animation handlers must skip
+// gracefully. Never throw.
+function findNodeByConcept(conceptId) {
+  if (!conceptId) return null;
+  const id = String(conceptId).toLowerCase();
+  for (const node of allNodes) {
+    const nodeId = String(node.userData.id || '').toLowerCase();
+    if (nodeId === id) return node;
+    // Partial match — first word
+    if (nodeId.split('_')[0] === id.split('_')[0] && id.length > 3) return node;
+  }
+  return null;
+}
+
+// ── ANIMATION HANDLERS ───────────────────────────────────────
+
+// 1. Hebbian update — brief pulse on the affected nodes
+function animateHebbian(payload) {
+  // Payload shape: {subject, object, weight, ...}
+  const nodes = [
+    findNodeByConcept(payload?.subject),
+    findNodeByConcept(payload?.object),
+  ].filter(Boolean);
+  nodes.forEach(node => {
+    const mat = node.material;
+    if (!mat?.uniforms?.uPulse) return;
+    // Pulse uniform briefly, then decay
+    mat.uniforms.uPulse.value = 1.0;
+    gsap.to(mat.uniforms.uPulse, {
+      value: 0,
+      duration: 0.8,
+      ease: 'power2.out',
+    });
+  });
+}
+
+// 2. Triples extracted — surface materialisation
+//    For each new triple, briefly highlight the subject/object nodes.
+//    True new-node creation deferred to a later phase (requires
+//    dynamic node insertion into the existing scene graph).
+function animateTriplesExtracted(payload) {
+  const triples = payload?.triples || [];
+  triples.slice(0, 3).forEach((t, i) => {
+    setTimeout(() => {
+      const n = findNodeByConcept(t.subject || t.s);
+      if (!n?.material?.uniforms?.uPulse) return;
+      n.material.uniforms.uPulse.value = 1.2;
+      gsap.to(n.material.uniforms.uPulse, {
+        value: 0,
+        duration: 1.0,
+        ease: 'power2.out',
+      });
+    }, i * 150);
+  });
+}
+
+// 3. KAIROS consolidation — descent from hippocampus to neocortex
+//    Visually migrates the affected node downward through the
+//    horizon ring. The most powerful single animation.
+function animateConsolidation(payload) {
+  const conceptId = payload?.concept || payload?.subject;
+  const node = findNodeByConcept(conceptId);
+  if (!node) return;
+
+  // Only animate if node is currently in hippocampus (Y > 200)
+  if (node.position.y < 200) return;
+
+  // Target position in neocortex (Y around 0, near existing neo nodes)
+  const targetY = -30 + (Math.random() - 0.5) * 100;
+
+  // Phase 1: brighten before descent
+  if (node.material?.uniforms?.uPulse) {
+    node.material.uniforms.uPulse.value = 1.5;
+  }
+
+  // Phase 2: descend over 3.5 seconds
+  gsap.to(node.position, {
+    y: targetY,
+    duration: 3.5,
+    ease: 'power2.inOut',
+    onComplete: () => {
+      // Update userData layer so future hover tooltips reflect new home
+      node.userData.layer = 'neocortex';
+      if (node.material?.uniforms?.uPulse) {
+        gsap.to(node.material.uniforms.uPulse, {
+          value: 0,
+          duration: 1.0,
+        });
+      }
+    }
+  });
+}
+
+// 4. Archive sealing — crystallisation event
+//    Currently animates by flashing all visible crystals + extending
+//    the chain. True new-crystal generation deferred (requires
+//    dynamic geometry insertion).
+function animateChainAppended(payload) {
+  crystals.forEach((c, i) => {
+    setTimeout(() => {
+      gsap.to(c.scale, {
+        x: 1.3, y: 1.3, z: 1.3,
+        duration: 0.6,
+        ease: 'power2.out',
+        yoyo: true,
+        repeat: 1,
+      });
+    }, i * 200);
+  });
+}
+
+// 5. Prediction error — high-surprise node pulse
+function animatePredictionError(payload) {
+  const concepts = payload?.high_surprise || payload?.concepts || [];
+  concepts.slice(0, 5).forEach((c, i) => {
+    setTimeout(() => {
+      const n = findNodeByConcept(c);
+      if (!n?.material?.uniforms?.uPulse) return;
+      n.material.uniforms.uPulse.value = 1.8;
+      gsap.to(n.material.uniforms.uPulse, {
+        value: 0,
+        duration: 1.2,
+        ease: 'power3.out',
+      });
+    }, i * 80);
+  });
+}
+
+// ── DISPATCHER ───────────────────────────────────────────────
+
+function dispatchLoopEvent(eventName, payload) {
+  switch (eventName) {
+    case 'hebbian':              animateHebbian(payload); break;  // real backend name
+    case 'hebbian_update':       animateHebbian(payload); break;  // spec alias
+    case 'triples_extracted':    animateTriplesExtracted(payload); break;
+    case 'triples_injected':     animateTriplesExtracted(payload); break;
+    case 'kairos_consolidation': animateConsolidation(payload); break;  // dormant
+    case 'chain_appended':       animateChainAppended(payload); break;  // dormant
+    case 'prediction_error':     animatePredictionError(payload); break;
+    // Other events ignored — animations are selective by design
+  }
+}
+
+// ── POLL LOOP ────────────────────────────────────────────────
+
+async function pollEvents() {
+  if (!_eventPollActive) return;
+  try {
+    const r = await fetch(`/events/recent?since=${_eventCursor}`);
+    if (r.ok) {
+      const data = await r.json();
+      _eventCursor = data.now || _eventCursor;
+      for (const evt of (data.events || [])) {
+        try {
+          dispatchLoopEvent(evt.event, evt.data || {});
+        } catch (err) {
+          // Never let one bad event break the poll loop
+          console.warn('event dispatch error:', err);
+        }
+      }
+    }
+  } catch (err) {
+    // Network error — keep polling
+  }
+  setTimeout(pollEvents, 1000);
+}
+
+// Start polling after scene initialises
+setTimeout(() => {
+  pollEvents();
+}, 2000);
+</script>
+
+</body>
+</html>

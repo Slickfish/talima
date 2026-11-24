@@ -1,0 +1,34 @@
+# NEXUS — a tester's relay (W4 part 3, run/specs/W4.md D15 as refined).
+#
+# Each tester's pod is this relay, `hosted-tN` in docker-compose.yml. It owns
+# the pod's network namespace; the tester's NEXUS joins it and listens on
+# 127.0.0.1:8000, so this relay is the only way to it. NEXUS in proxy mode
+# accepts a request only from a loopback peer that carries the identity
+# header, and a request this relay forwards arrives from 127.0.0.1.
+#
+# So this relay answers 403 to every immediate peer but one: the identity
+# proxy, at the one fixed address NEXUS_IDENTITY_PROXY_IP on the `front`
+# network. It trusts that address and never the subnet, because every
+# tester's pod is on `front` too: a relay that trusted the subnet would
+# trust every other tester's process. The rest it forwards to NEXUS with
+# the request's headers as they arrive (the identity header among them:
+# the identity proxy sets it), unbuffered, because /chat is a long-lived
+# stream.
+#
+# The admin endpoint is off: it would listen on the pod's loopback, where
+# any process in the pod could reconfigure the relay. Nothing is persisted,
+# and nothing here is HTTPS (the identity proxy holds the certificate).
+
+{
+	admin off
+	persist_config off
+	auto_https off
+}
+
+:8100 {
+	@not_the_identity_proxy not remote_ip {$NEXUS_IDENTITY_PROXY_IP}
+	respond @not_the_identity_proxy "forbidden: this relay answers only the identity proxy" 403
+	reverse_proxy 127.0.0.1:8000 {
+		flush_interval -1
+	}
+}

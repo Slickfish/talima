@@ -1,0 +1,23 @@
+{
+  "algorithm": "ed25519",
+  "created_at": 1700000000.000095,
+  "key_id": "539c3f5b8b250704887498eb51267f755f3e139eca13108179755078a1f2fb34",
+  "keys": [
+    {
+      "active_from": 1700000000.0001,
+      "active_to": null,
+      "algorithm": "ed25519",
+      "announced_in": 0,
+      "key_id": "539c3f5b8b250704887498eb51267f755f3e139eca13108179755078a1f2fb34",
+      "previous_key_id": null,
+      "public_key": "a7324a68a80a0e92d5cfb04b0a10a074b5a87e837be0dea9b057e3704bb97ade",
+      "reason": "first",
+      "until_block": null
+    }
+  ],
+  "public_key": "a7324a68a80a0e92d5cfb04b0a10a074b5a87e837be0dea9b057e3704bb97ade",
+  "signing": {
+    "last_error": null,
+    "unsigned_appends_since_start": 0
+  }
+}

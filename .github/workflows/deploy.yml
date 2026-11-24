@@ -1,0 +1,111 @@
+# The deploy (RUN_WORKLIST.md W3; run/specs/W3.md D7): on manual dispatch,
+# pull and restart the compose project on ONE host over SSH, then verify it
+# with scripts/verify_deploy.py from here: the console checks through its
+# public HTTPS, the docker ones (the backup, its restore, the egress proof)
+# through `docker compose` on the host over SSH (`--remote`).
+#
+# Env-gated, a named no-op without its secrets: DEPLOY_HOST, DEPLOY_USER and
+# DEPLOY_KEY (an SSH private key for that one host; the runbook says how it
+# is rotated) are read into job-level env, because `secrets.*` is not allowed
+# in `if:`; every step that reaches the host is `if: env.DEPLOY_HOST != ''`,
+# and with any of the three unset the one step that runs says so and the job
+# ends green: a deploy that could not happen is reported, never mistaken for
+# one that did.
+#
+# The credentials are per job (RUN_WORKLIST W3): the key reaches one host,
+# the console token is that instance's (NEXUS_API_TOKEN, a fourth secret, for
+# the verification only). The host was prepared by deploy/cloud-init.yaml
+# (/opt/nexus, the compose project, the .env with the profile).
+
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      # Exactly the profiles compose's NEXUS services run and
+      # scripts/verify_deploy.py checks (tests/test_w3_ci.py C9 derives both).
+      profile:
+        description: "The compose profile the host runs"
+        required: true
+        default: stub
+        type: choice
+        options: [stub, ollama, api, hosted]
+      domain:
+        description: "The host name Caddy serves (NEXUS_DOMAIN on the host); the verification connects to https://<domain>"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.domain }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy (${{ inputs.profile }} to ${{ inputs.domain }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+      NEXUS_API_TOKEN: ${{ secrets.NEXUS_API_TOKEN }}
+      NEXUS_PROFILE: ${{ inputs.profile }}
+      NEXUS_DOMAIN: ${{ inputs.domain }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No-op without the secrets
+        if: env.DEPLOY_HOST == '' || env.DEPLOY_USER == '' || env.DEPLOY_KEY == ''
+        run: |
+          echo "deploy: NO-OP. DEPLOY_HOST, DEPLOY_USER and DEPLOY_KEY are not all set as repository secrets; nothing was reached." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "set: HOST=${DEPLOY_HOST:+yes}${DEPLOY_HOST:-no} USER=${DEPLOY_USER:+yes}${DEPLOY_USER:-no} KEY=${DEPLOY_KEY:+yes}${DEPLOY_KEY:-no}"
+
+      - name: The key (this job only)
+        if: env.DEPLOY_HOST != '' && env.DEPLOY_USER != '' && env.DEPLOY_KEY != ''
+        run: |
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 0600 "$HOME/.ssh/deploy_key"
+          ssh-keyscan -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+      - name: Pull and restart the compose project on the host
+        if: env.DEPLOY_HOST != '' && env.DEPLOY_USER != '' && env.DEPLOY_KEY != ''
+        run: |
+          ssh -i "$HOME/.ssh/deploy_key" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd /opt/nexus && docker compose --profile '$NEXUS_PROFILE' pull && docker compose --profile '$NEXUS_PROFILE' up -d && docker compose --profile '$NEXUS_PROFILE' ps"
+
+      - name: "Verify the deployment: V1 to V5 from here over HTTPS, V6 to V9 through docker compose on the host over SSH"
+        if: env.DEPLOY_HOST != '' && env.DEPLOY_USER != '' && env.DEPLOY_KEY != ''
+        run: |
+          # The one verifier, the checks the smoke runs beside the stack: the
+          # backup and its restore, the egress proof with its real verdict
+          # (ENETUNREACH at every public address, the sibling reached, the
+          # network isolated; SKIPPED by name under api), and under hosted
+          # the role NEXUS connects as (V9, W4 part 0), run on the host
+          # through `docker compose` over SSH, never a probe composed here
+          # (the W3 verifier's F1).
+          set -o pipefail
+          python3 scripts/verify_deploy.py --profile "$NEXUS_PROFILE" --base-url "https://$NEXUS_DOMAIN" \
+            --remote "ssh -i $HOME/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST" --remote-dir /opt/nexus \
+            --backup-dir /opt/nexus/backups 2>&1 | tee "$RUNNER_TEMP/verify.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### deploy (${{ inputs.profile }} to ${{ inputs.domain }})"
+            echo
+            echo '```'
+            grep -E "^(PASS|FAIL|SKIP|verify_deploy|UNREACHABLE|REFUSED|backup:|restore verification|deploy:)" "$RUNNER_TEMP/verify.txt" 2>/dev/null || echo "nothing was verified (no-op, or the deploy step failed first)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Forget the key
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key"

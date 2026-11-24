@@ -1,0 +1,54 @@
+# NEXUS — the stand-in's routes (W4 part 3, run/specs/W4.md D16): the deploy
+# smoke's stand-in for the identity proxy (deploy/compose.identity-sim.yml),
+# and nothing else's. A real identity proxy authenticates a person first;
+# this one presents a fixed login per port to whoever connects.
+#
+# `header_up <name> <value>` replaces every copy of the header a client
+# sent; `header_up -<name>` removes them. The header's name is the one the
+# testers' NEXUS read (NEXUS_IDENTITY_HEADER), the logins their owners'.
+
+{
+	admin off
+	persist_config off
+	auto_https off
+}
+
+# Tester 1, 2 and 3: that tester's login, to that tester's relay.
+:18101 {
+	reverse_proxy hosted-t1:8100 {
+		header_up {$NEXUS_IDENTITY_HEADER} {$NEXUS_T1_OWNER}
+		flush_interval -1
+	}
+}
+
+:18102 {
+	reverse_proxy hosted-t2:8100 {
+		header_up {$NEXUS_IDENTITY_HEADER} {$NEXUS_T2_OWNER}
+		flush_interval -1
+	}
+}
+
+:18103 {
+	reverse_proxy hosted-t3:8100 {
+		header_up {$NEXUS_IDENTITY_HEADER} {$NEXUS_T3_OWNER}
+		flush_interval -1
+	}
+}
+
+# The mismatch: tester 2's login, to tester 1's relay (tester 1's NEXUS
+# answers 403: the login is not its owner's).
+:18111 {
+	reverse_proxy hosted-t1:8100 {
+		header_up {$NEXUS_IDENTITY_HEADER} {$NEXUS_T2_OWNER}
+		flush_interval -1
+	}
+}
+
+# No identity: the header removed, to tester 1's relay (tester 1's NEXUS
+# answers 401).
+:18112 {
+	reverse_proxy hosted-t1:8100 {
+		header_up -{$NEXUS_IDENTITY_HEADER}
+		flush_interval -1
+	}
+}

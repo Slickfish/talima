@@ -1,0 +1,68 @@
+{
+  "manifest_version": "0.3",
+  "name": "nexus",
+  "display_name": "NEXUS (learning frozen)",
+  "version": "0.1.0",
+  "description": "NEXUS memory for Claude: retrieval from a store on this computer, and a sealed record of what the model was shown and what it said. Learning is frozen in this bundle.",
+  "long_description": "NEXUS keeps a store on this computer and makes no network calls. Before answering, Claude calls `nexus_retrieve` for the context NEXUS would inject; after answering, `nexus_record` seals what it was shown and what it said. `nexus_recall` and `nexus_asof` read the record back.\n\n**Learning is frozen in this bundle.** Nothing NEXUS observes changes what it retrieves later. This is fixed by the bundle and is not a setting; `nexus_status` reports it on every call, and every record carries it.\n\n**The owner** you enter is recorded on every record as the accountable identity: asserted by you, never verified.\n\n**The data folder** holds the store and its logs. Left empty, it is a per-user application-data folder: `%LOCALAPPDATA%\\NEXUS` on Windows, `~/Library/Application Support/NEXUS` on macOS. One NEXUS process opens a store at a time; a second is refused by name.",
+  "author": {
+    "name": "NEXUS"
+  },
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/nexus-mcp/nexus-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/nexus-mcp/nexus-mcp",
+      "args": [],
+      "env": {
+        "NEXUS_MCP_OWNER": "${user_config.owner}",
+        "NEXUS_MCP_DATA_ROOT": "${user_config.data_folder}",
+        "NEXUS_LEARNING": "frozen",
+        "NEXUS_ENV_ROOT": "${__dirname}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/nexus-mcp/nexus-mcp.exe",
+          "args": [],
+          "env": {
+            "NEXUS_MCP_OWNER": "${user_config.owner}",
+            "NEXUS_MCP_DATA_ROOT": "${user_config.data_folder}",
+            "NEXUS_LEARNING": "frozen",
+            "NEXUS_ENV_ROOT": "${__dirname}"
+          }
+        }
+      }
+    }
+  },
+  "tools": [
+    {"name": "nexus_retrieve", "description": "Call before answering: the context block NEXUS would inject for the question, and a retrieval id for nexus_record."},
+    {"name": "nexus_record", "description": "Call after answering: seals the record of what you were shown and what you said."},
+    {"name": "nexus_recall", "description": "Every sealed answer that rested on a claim, oldest first (read-only)."},
+    {"name": "nexus_asof", "description": "What the store held at an instant with a UTC offset (read-only)."},
+    {"name": "nexus_assert", "description": "Shows exactly what a statement would store; stores nothing."},
+    {"name": "nexus_assert_confirm", "description": "Stores a statement as the user's own belief, only when confirmed is true."},
+    {"name": "nexus_commit", "description": "Commits to a note you supply, salted and sealed, without disclosing it; only when confirmed is true."},
+    {"name": "nexus_record_action", "description": "Records an action you report for a turn, as client_reported: NEXUS did not see it happen."},
+    {"name": "nexus_status", "description": "Learning mode, owner, coverage counters and open retrievals."}
+  ],
+  "tools_generated": false,
+  "prompts_generated": false,
+  "compatibility": {
+    "platforms": ["darwin", "win32"]
+  },
+  "user_config": {
+    "owner": {
+      "type": "string",
+      "title": "Owner (your name or e-mail)",
+      "description": "Recorded on every record as the accountable identity: asserted by you, never verified.",
+      "required": true
+    },
+    "data_folder": {
+      "type": "directory",
+      "title": "Data folder",
+      "description": "Where NEXUS keeps its store and logs. Leave it empty for the per-user application-data folder (Windows: %LOCALAPPDATA%\\NEXUS; macOS: ~/Library/Application Support/NEXUS). Not a synced folder: a store must be open on one computer at a time.",
+      "required": false
+    }
+  }
+}

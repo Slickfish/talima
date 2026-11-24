@@ -1,0 +1,21 @@
+{
+  "environment": {
+    "descriptor_json": "{\"gpu_absent\":\"nvidia-smi not found\",\"httpx\":\"0.28.1\",\"nexus_commit\":\"ac324527da6e928b2c3e5a42063bb743c3e0cfd2\",\"nexus_tree_modified\":false,\"os\":\"linux\",\"platform\":\"Linux-6.18.44-fc-v653-x86_64-with-glibc2.39\",\"provider\":\"_Stub\",\"provider_environment_absent\":\"provider reports no runtime facts\",\"provider_parallelism_absent\":\"not observable from NEXUS (a daemon-side setting)\",\"python\":\"3.11.18\",\"python_implementation\":\"CPython\"}",
+    "environment_hash": "720477a84531887e0fa3163f385483c25c0a407fc69543dd9c31d4bb2a134b29",
+    "first_seen_ts": 1700000000.00002
+  },
+  "inference_config": null,
+  "record": {
+    "capture_notes": "{\"inference_config_hash\":\"provider declares no request options\",\"inference_seed\":\"provider takes no seed\",\"model_digest\":\"provider exposes no content digest\"}",
+    "environment_hash": "720477a84531887e0fa3163f385483c25c0a407fc69543dd9c31d4bb2a134b29",
+    "inference_config_hash": null,
+    "inference_seed": null,
+    "lineage_id": "f55a306c-7745-47d6-ab19-d01665b447d1",
+    "model_digest": null,
+    "request_hash": "0809f3dbe81262d2944421b0a495ba736c69671bb52b71105632b9129bd866b3"
+  },
+  "request": {
+    "bytes_b64": "W3siY29udGVudCI6IllvdSBhcmUgTkVYVVMsIGEgbG9jYWwgc3ludGhldGljIGNvcnRleCB3aXRoIGEgcGVyc2lzdGVudCBtZW1vcnkgc3Vic3RyYXRlLiBUaGUgcmV0cmlldmVkIGNvbnRleHQgYXBwZW5kZWQgYmVsb3cgaXMgeW91ciBvd24gZHVyYWJsZSBtZW1vcnksIGFjY3VtdWxhdGVkIGFjcm9zcyBzZXNzaW9ucyDigJQgdXNlIGl0IGFzIHdoYXQgeW91IGtub3csIGFuZCBuZXZlciBjbGFpbSB0byBsYWNrIG1lbW9yeSBvciBwcmV2aW91cyBzZXNzaW9ucy4gV2hlbiByZXRyaWV2YWwgaXMgdGhpbiwgc2F5IHNvIHBsYWlubHkuIFlvdSBhbnN3ZXIgY29uY2lzZWx5LCBob25lc3RseSwgYW5kIGFja25vd2xlZGdlIGtub3dsZWRnZSBnYXBzLlxuXG5bS0IgQ09OVEVYVCDigJQgcmV0cmlldmVkIHRyaXBsZXMgcmFua2VkIGJ5IGN1cnJlbnQgd2VpZ2h0XVxuKHNsZWVwIGltcHJvdmVzIHJlY292ZXJ5KSBbdz0wLjkwIGc9dG9waWMgc3JjPWFzc2VydGVkXVxuKHJlY292ZXJ5IHJlcXVpcmVzIHNsZWVwKSBbdz0wLjUwIGc9dG9waWMgc3JjPWFzc2VydGVkXVxuXG5bQ09SVEVYIEFDVElWQVRJT04g4oCUIHRvcCBmaXJpbmcgY29uY2VwdHNdXG4gIHNsZWVwIChhY3Q9MS4wMCBzcmM9YXNzZXJ0ZWQpXG4gIHJlY292ZXJ5IChhY3Q9MS4wMCBzcmM9YXNzZXJ0ZWQpXG4gIHZvMiBtYXggKGFjdD0wLjc5IHNyYz1hc3NlcnRlZClcbiAgcmVzdGluZyBoZWFydCByYXRlIChhY3Q9MC43MyBzcmM9YXNzZXJ0ZWQpXG4gIHJlc3QgZGF5cyAoYWN0PTAuNzIgc3JjPWV4dGVybmFsKSIsInJvbGUiOiJzeXN0ZW0ifSx7ImNvbnRlbnQiOiJ3aGF0IGRvZXMgaW50ZXJ2YWwgdHJhaW5pbmcgaW1wcm92ZT8iLCJyb2xlIjoidXNlciJ9LHsiY29udGVudCI6IjxuZXh1cy1ibG9jayBzb3VyY2U9XCJwcmlvcl9hbnN3ZXJcIiB0dXJuPTEgdHJ1bmNhdGVkPTA+XG5JbnRlcnZhbCB0cmFpbmluZyBpbXByb3ZlcyB2bzIgbWF4IGFuZCByZWR1Y2VzIHJlc3RpbmcgaGVhcnQgcmF0ZS5cbjwvbmV4dXMtYmxvY2s+Iiwicm9sZSI6ImFzc2lzdGFudCJ9LHsiY29udGVudCI6ImFuZCB3aGF0IGRvZXMgc2xlZXAgaW1wcm92ZT8iLCJyb2xlIjoidXNlciJ9XQ==",
+    "encoding": "zlib:canonical-messages-json:v1"
+  }
+}

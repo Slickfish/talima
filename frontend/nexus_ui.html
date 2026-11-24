@@ -1,0 +1,2275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link href="/vendor/fonts/fonts.css" rel="stylesheet">
+<title>NEXUS — Synthetic Cortex</title>
+<script src="/vendor/d3.v7.min.js"></script>
+<script>
+/* Auth shim (Package A): the server injects window.NEXUS_TOKEN when serving
+   this page; wrap fetch so every API call carries the bearer token. */
+(function () {
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    init = init || {};
+    if (window.NEXUS_TOKEN) {
+      init.headers = Object.assign({}, init.headers,
+        { Authorization: 'Bearer ' + window.NEXUS_TOKEN });
+    }
+    return _fetch(input, init);
+  };
+})();
+</script>
+<style>
+  :root {
+    --bg: #0b0b0e; --panel: #14141a; --border: #25252e;
+    --ink: #dcdce0; --muted: #6a6a72;
+    --known: #88e0c0; --partial: #e0c088; --contradicted: #e08888;
+    --known-unknown: #6a6a72; --inferred: #b388e0;
+    /* UI v3 mock tokens (additive). --accent shifted to canonical cyan. */
+    --accent: #00e5ff;
+    --surface: #111318; --surface2: #181c23; --border2: #2e3545;
+    --accent2: #7c3aed; --accent3: #22c55e; --warn: #f59e0b; --danger: #ef4444;
+    --text: #e2e8f0; --text2: #94a3b8; --text3: #4a5568;
+    --mono: 'Space Mono', monospace; --sans: 'Syne', sans-serif;
+    --panel-w: 320px; --header-h: 48px; --status-h: 28px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    background: var(--bg); color: var(--ink);
+    margin: 0; height: 100vh; overflow: hidden;
+  }
+  #shell {
+    display: flex;          /* Pass 2 — flex to host resize handles between columns */
+    height: 100vh;
+    min-height: 0;          /* allow children to shrink so overflow-y works */
+    overflow: hidden;
+  }
+  /* Pass 1 — every column must allow shrink for its inner overflow-y to take effect */
+  #shell > * { min-height: 0; }
+  /* Pass 2 — explicit widths so the JS resize handle can grow/shrink them */
+  #shell > #left  { width: 280px; flex-shrink: 0; }
+  #shell > #centre { flex: 1 1 auto; min-width: 0; }
+  #shell > #right { width: 320px; flex-shrink: 0; }
+  .panel {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;       /* scroll vertically when content exceeds height */
+    overflow-x: hidden;
+    min-height: 0;          /* required so this grid child can actually shrink */
+    padding: 12px;
+  }
+  .panel:last-child { border-right: 0; border-left: 1px solid var(--border); }
+  h2 { font-size: 11px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
+  h2:first-child { margin-top: 0; }
+  .section { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px dashed var(--border); }
+  .section:last-child { border-bottom: 0; }
+  button { background: #1f3b30; color: var(--accent); border: 1px solid #2a5a48; padding: 6px 10px; border-radius: 3px; font: inherit; font-size: 11px; cursor: pointer; }
+  button:hover { background: #2a4a3d; }
+  button:disabled { opacity: .4; cursor: wait; }
+  input, textarea { background: #16161b; color: var(--ink); border: 1px solid var(--border); padding: 6px 8px; border-radius: 3px; font: inherit; font-size: 12px; width: 100%; }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+  .row { display: flex; gap: 6px; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; background: #25252e; color: var(--muted); margin-right: 4px; }
+  .pill.code { background: #2a3a48; color: #88c0e0; }
+  .pill.health { background: #482a30; color: #e08888; }
+  .pill.fitness { background: #2a4830; color: #88e088; }
+  .pill.gen { background: #353540; color: #d0d0d8; }
+  .triple { font-size: 11px; color: var(--muted); padding: 2px 0; line-height: 1.4; }
+  .triple b { color: var(--ink); }
+  .epi-known { color: var(--known); }
+  .epi-partial { color: var(--partial); }
+  .epi-contradicted { color: var(--contradicted); }
+  .epi-known_unknown { color: var(--known-unknown); }
+  .epi-inferred { color: var(--inferred); }
+
+  /* centre column */
+  #centre {
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    gap: 8px;
+    padding: 8px;
+    background: var(--bg);
+    min-height: 0;          /* allow inner rows + chat-card flex to size correctly */
+    overflow: hidden;
+  }
+  #centre > * { min-height: 0; }
+  #graph-card, #chat-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  #graph-card { min-height: 0; }
+  .card-head { padding: 6px 12px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+  #graph-svg { flex: 1; width: 100%; height: 100%; min-height: 0; cursor: grab; }
+  circle.node { cursor: pointer; stroke-width: 1.2; }
+  /* N.1b — opacity is set inline by applyFocus(); the transition makes the
+     focus fade read as a fade rather than a flicker. */
+  circle.node, text.label, line.edge { transition: opacity .18s ease-out; }
+  #graph-reset { margin-left: auto; font: 10px ui-monospace, monospace;
+                 background: transparent; color: var(--muted);
+                 border: 1px solid #2a2a36; border-radius: 3px;
+                 padding: 1px 6px; cursor: pointer; }
+  #graph-reset:hover { color: var(--accent); border-color: var(--accent); }
+  text.label { font: 10px ui-monospace, monospace; fill: var(--ink); pointer-events: none; }
+  line.edge { stroke-opacity: .7; }
+  .firing { animation: pulse 0.6s ease-out; }
+  @keyframes pulse { 0% { stroke: var(--accent); stroke-width: 4; } 100% { stroke-width: 1.2; } }
+
+  /* chat */
+  #chat-log {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;          /* required for flex child to scroll inside #chat-card */
+    padding: 12px;
+    font-size: 13px;
+  }
+  .msg { margin-bottom: 12px; }
+  .msg .who { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+  .msg.user .body { color: var(--accent); }
+  .msg.asst .body { color: var(--ink); }
+  .msg .meta { color: var(--muted); font-size: 10px; margin-top: 4px; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-left: 6px; background: #25252e; color: var(--accent); }
+
+  /* H.2 — per-answer provenance. Attached to the message it explains, not to
+     a turn-scoped panel: the right panel's #injected section is overwritten by
+     the next turn, so provenance there vanishes the moment you ask a
+     follow-up. Evidence that disappears when questioned is not evidence. */
+  .prov-toggle {
+    font-size: 10px; padding: 1px 7px; margin-top: 5px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 3px; cursor: pointer;
+  }
+  .prov-toggle:hover { color: var(--accent); border-color: rgba(0,229,255,0.35); }
+  .prov {
+    margin-top: 6px; padding: 8px 10px; border-left: 2px solid var(--accent2);
+    background: rgba(124,58,237,0.05); font-size: 11px; line-height: 1.5;
+  }
+  .prov h4 {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin: 8px 0 3px; font-weight: 600;
+  }
+  .prov h4:first-child { margin-top: 0; }
+  .prov .row { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .prov .row:last-child { border-bottom: none; }
+  .prov .spo { color: var(--ink); }
+  .prov .w { color: var(--muted); font-size: 10px; }
+  .prov .w b { color: var(--ink); font-weight: 600; }
+  /* The three weights are visually distinct because they are different
+     objects (I-5). Never render them in one undifferentiated run. */
+  .prov .w-inj  { color: var(--accent); }
+  .prov .w-now  { color: var(--accent3); }
+  .prov .w-high { color: var(--muted); }
+  .prov .unresolved { color: var(--warn); font-style: italic; }
+  .prov .seal-ok    { color: var(--accent3); }
+  .prov .seal-wait  { color: var(--warn); }
+  .prov .seal-bad   { color: var(--danger); font-weight: 700; }
+  .prov .contra { color: var(--danger); }
+  #compose { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+  /* v3.1 Phase 1b — the work-unit bar above compose; same tokens, no new colour */
+  #unit-bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px 0; border-top: 1px solid var(--border); font-size: 11px; }
+  #unit-bar input { flex: 1; min-width: 0; }
+  #unit-bar #unit-close.armed { border-color: var(--warn); color: var(--warn); }
+
+  /* Pass 2 — drag handles between the three columns */
+  .resize-handle {
+    width: 4px;
+    background: var(--border);
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background 0.15s;
+    position: relative;
+    z-index: 10;
+  }
+  .resize-handle:hover,
+  .resize-handle.dragging {
+    background: var(--accent2);
+  }
+  .resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: -4px; right: -4px;   /* wider invisible hit target */
+  }
+  .alert { background: #2a2018; border: 1px solid #5a4030; color: #e0c088; padding: 6px 8px; border-radius: 3px; font-size: 11px; margin-top: 6px; }
+  /* Fix 0 — web search proposal card */
+  .search-proposal {
+    background: rgba(0,229,255,0.07);
+    border: 1px solid rgba(0,229,255,0.25);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 8px 0;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .search-proposal strong { color: var(--accent); }
+  .search-proposal .proposal-actions {
+    display: flex; gap: 8px; margin-top: 8px;
+  }
+  .search-proposal button {
+    padding: 4px 12px; font-size: 10px;
+    border-radius: 3px; cursor: pointer;
+  }
+  .search-proposal .btn-confirm {
+    background: var(--accent); color: var(--bg); border: none;
+  }
+  .search-proposal .btn-dismiss {
+    background: none; color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .badge-pass { background: #1f3b30; color: #88e0c0; border: 1px solid #2a5a48; padding: 2px 8px; border-radius: 3px; font-size: 11px; }
+  .badge-warn { background: #3b3318; color: #e0c088; border: 1px solid #5a4030; padding: 2px 8px; border-radius: 3px; font-size: 11px; }
+  .badge-fail { background: #3b1818; color: #e08888; border: 1px solid #5a2a2a; padding: 2px 8px; border-radius: 3px; font-size: 11px; }
+  .badge-fail.locked { animation: pulse-red 1.4s ease-in-out infinite; }
+  @keyframes pulse-red { 0%,100% { opacity: 1 } 50% { opacity: 0.55 } }
+  .curio { padding: 4px 0; border-bottom: 1px dotted var(--border); }
+  .curio:last-child { border-bottom: 0; }
+  .curio .q { color: var(--ink); font-size: 11px; line-height: 1.4; }
+  .curio .meta { color: var(--muted); font-size: 10px; }
+  .contradiction { background: #3b1818; border: 1px solid #5a2a2a; color: #e08888; padding: 4px 6px; border-radius: 3px; font-size: 11px; margin-top: 4px; }
+
+  /* ===== UI v3 — mock-matched additions (additive, non-destructive) ===== */
+  /* 3.1 Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none; z-index: 9999;
+  }
+  /* 3.2 Logo */
+  .logo {
+    padding: 0 20px;
+    font-family: var(--sans); font-weight: 800; font-size: 16px;
+    letter-spacing: 0.15em; color: var(--accent);
+    border-right: 1px solid var(--border);
+    height: 100%; display: flex; align-items: center;
+    text-shadow: 0 0 20px rgba(0,229,255,0.4);
+  }
+  .logo span {
+    color: var(--text3); font-weight: 400; font-size: 10px;
+    margin-left: 8px; letter-spacing: 0.05em;
+  }
+  /* 3.3 Nav tabs */
+  nav { display: flex; height: 100%; border-right: 1px solid var(--border); }
+  nav button {
+    height: 100%; padding: 0 18px;
+    background: none; border: none; border-right: 1px solid var(--border);
+    color: var(--text2); font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    cursor: pointer; transition: all 0.15s; position: relative;
+  }
+  nav button:hover { color: var(--text); background: var(--surface2); }
+  nav button.active { color: var(--accent); background: rgba(0,229,255,0.05); }
+  nav button.active::after {
+    content: ''; position: absolute; bottom: 0; left: 0; right: 0;
+    height: 2px; background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  }
+  /* 3.4 Header stats */
+  .header-stats { margin-left: auto; display: flex; align-items: center; height: 100%; }
+  .hstat {
+    padding: 0 16px; border-left: 1px solid var(--border);
+    height: 100%; display: flex; flex-direction: column;
+    justify-content: center; gap: 2px;
+  }
+  .hstat-label { color: var(--text3); font-size: 8px; letter-spacing: 0.15em; text-transform: uppercase; }
+  .hstat-val   { color: var(--accent3); font-size: 11px; font-weight: 700; }
+  .hstat-val.warn { color: var(--warn); }
+  .model-badge {
+    padding: 0 16px; border-left: 1px solid var(--border);
+    height: 100%; display: flex; align-items: center; gap: 8px; font-size: 10px;
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent3); box-shadow: 0 0 8px var(--accent3);
+    animation: dotPulse 2s infinite;
+  }
+  @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  /* 3.5 Panel structure */
+  .panel-header {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .panel-title {
+    font-family: var(--sans); font-size: 10px; font-weight: 600;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--text2);
+  }
+  .panel-badge {
+    font-size: 9px; padding: 2px 6px; border-radius: 2px;
+    background: rgba(0,229,255,0.1); color: var(--accent);
+    border: 1px solid rgba(0,229,255,0.2);
+  }
+  .section-divider {
+    padding: 7px 14px; font-size: 9px; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--text3);
+    border-bottom: 1px solid var(--border); background: var(--surface2);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  /* 3.6 Seed controls */
+  .seed-controls { padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .seed-row { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
+  .seed-row:last-child { margin-bottom: 0; }
+  label.field-label {
+    font-size: 9px; color: var(--text3); letter-spacing: 0.1em;
+    text-transform: uppercase; margin-bottom: 4px; display: block;
+  }
+  select, input[type="text"], input[type="number"] {
+    background: var(--bg); border: 1px solid var(--border2);
+    color: var(--text); font-family: var(--mono); font-size: 11px;
+    padding: 5px 8px; border-radius: 2px; width: 100%;
+    outline: none; transition: border-color 0.15s;
+  }
+  select:focus, input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(0,229,255,0.15);
+  }
+  select option { background: var(--surface2); }
+  .btn {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 6px 12px; border-radius: 2px;
+    border: 1px solid var(--border2); cursor: pointer;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .btn-primary { background: rgba(0,229,255,0.1); color: var(--accent); border-color: rgba(0,229,255,0.3); }
+  .btn-primary:hover { background: rgba(0,229,255,0.2); box-shadow: 0 0 12px rgba(0,229,255,0.2); }
+  .btn-ghost { background: transparent; color: var(--text2); }
+  .btn-ghost:hover { background: var(--surface2); color: var(--text); }
+  .btn-sm { padding: 4px 8px; font-size: 9px; }
+  .progress-bar { height: 3px; background: var(--border); border-radius: 1px; overflow: hidden; margin-top: 6px; }
+  .progress-fill {
+    height: 100%; background: linear-gradient(90deg, var(--accent2), var(--accent));
+    border-radius: 1px; transition: width 0.3s; box-shadow: 0 0 8px var(--accent);
+  }
+  /* 3.7 KB source list */
+  .kb-list { overflow-y: auto; }
+  .kb-item {
+    padding: 8px 14px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px;
+    cursor: pointer; transition: background 0.1s;
+  }
+  .kb-item:hover { background: var(--surface2); }
+  .kb-item-header { display: flex; align-items: center; justify-content: space-between; }
+  .kb-item-name  { font-size: 11px; color: var(--text); }
+  .kb-item-count { font-size: 9px; color: var(--accent3); }
+  .kb-bar        { height: 2px; background: var(--border); border-radius: 1px; }
+  .kb-bar-fill   { height: 100%; border-radius: 1px; background: var(--accent3); }
+  .kb-meta       { font-size: 9px; color: var(--text3); }
+  /* 3.8 Session memory */
+  .memory-list { overflow-y: auto; }
+  .mem-item { padding: 8px 14px; border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  .mem-item:hover { background: var(--surface2); }
+  .mem-triple { font-size: 10px; line-height: 1.6; }
+  .mem-subj { color: var(--accent); }
+  .mem-rel  { color: var(--text3); font-style: italic; }
+  .mem-obj  { color: var(--accent3); }
+  .mem-conf { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+  .conf-bar { flex: 1; height: 2px; background: var(--border); border-radius: 1px; }
+  .conf-fill { height: 100%; background: var(--accent2); border-radius: 1px; }
+  .conf-val  { font-size: 9px; color: var(--text3); }
+  /* 3.9 Context inspector */
+  .ctx-panel { flex: 1; overflow-y: auto; }
+  .ctx-block { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .ctx-block-title {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.15em;
+    color: var(--text3); margin-bottom: 6px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .ctx-triple-list { display: flex; flex-direction: column; gap: 4px; }
+  .ctx-triple {
+    font-size: 10px; padding: 4px 7px;
+    background: var(--surface2); border-radius: 2px;
+    border-left: 2px solid var(--accent2); line-height: 1.5;
+  }
+  /* 3.10 Token budget */
+  .token-meter { margin-top: 8px; }
+  .token-row   { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .token-label { font-size: 9px; color: var(--text3); }
+  .token-val   { font-size: 9px; color: var(--text); }
+  .token-bar   { height: 4px; background: var(--border); border-radius: 1px; }
+  .token-fill  {
+    height: 100%; border-radius: 1px;
+    background: linear-gradient(90deg, var(--accent3), var(--warn));
+    transition: width 0.4s;
+  }
+  /* 3.11 System stats / VRAM */
+  .sys-stats { padding: 10px 14px; border-top: 1px solid var(--border); flex-shrink: 0; }
+  .stat-row  { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .stat-row:last-child { margin-bottom: 0; }
+  .stat-label        { font-size: 9px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.1em; }
+  .stat-val          { font-size: 10px; }
+  .stat-val.ok       { color: var(--accent3); }
+  .stat-val.warn     { color: var(--warn); }
+  .stat-val.danger   { color: var(--danger); }
+  .vram-bar  { height: 3px; background: var(--border); border-radius: 1px; margin-bottom: 8px; }
+  .vram-fill {
+    height: 100%; border-radius: 1px;
+    background: linear-gradient(90deg, var(--accent3) 0%, var(--warn) 70%, var(--danger) 100%);
+  }
+  /* 3.12 Status bar */
+  .statusbar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: var(--status-h); background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 14px; gap: 20px; font-size: 9px; color: var(--text3); z-index: 100;
+  }
+  .statusbar .s-item   { display: flex; align-items: center; gap: 5px; }
+  .statusbar .s-accent { color: var(--accent); }
+  .statusbar .s-warn   { color: var(--warn); }
+  .statusbar-right     { margin-left: auto; display: flex; gap: 20px; }
+  /* W4 part 1 — the bar is built only in proxy mode ("running as <login>");
+     the shell gives up the bar's height so the bar covers nothing. */
+  body.has-statusbar #shell { height: calc(100vh - var(--status-h)); }
+  /* 3.13 Toast (mock alias; existing showToast uses inline styles) */
+  .toast {
+    position: fixed; bottom: 40px; right: 16px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-left: 3px solid var(--accent3);
+    padding: 10px 14px; border-radius: 2px;
+    font-size: 10px; color: var(--text); z-index: 1000;
+    animation: toastIn 0.2s ease-out, toastOut 0.3s ease-in 2.5s forwards;
+    max-width: 260px;
+  }
+  @keyframes toastIn  { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
+  /* 3.14 Domain tabs */
+  .domain-tabs {
+    display: flex; padding: 8px 14px; background: var(--bg);
+    border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 4px;
+    flex-shrink: 0;
+  }
+  .domain-tab {
+    font-family: var(--mono); font-size: 9px; padding: 3px 8px;
+    border-radius: 2px; border: 1px solid var(--border2);
+    background: none; color: var(--text3); cursor: pointer;
+    transition: all 0.1s; letter-spacing: 0.08em;
+  }
+  .domain-tab.active { background: rgba(124,58,237,0.15); color: var(--accent2); border-color: rgba(124,58,237,0.4); }
+  .domain-tab:hover:not(.active) { background: var(--surface2); color: var(--text2); }
+  /* 3.15 Scrollbars */
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 1px; }
+  /* 3.16 Graph legend */
+  .graph-legend { position: absolute; bottom: 6px; right: 10px; display: flex; gap: 10px; font-size: 9px; color: var(--text3); }
+  .legend-dot   { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- LEFT PANEL: KB controls + session memory -->
+  <aside class="panel" id="left">
+    <div class="panel-header">
+      <span class="panel-title">Knowledge Base</span>
+      <span class="panel-badge" id="kb-status">0 sources</span>
+    </div>
+    <div class="section">
+      <!-- Fix 2: counts folded into #kb-status badge; old panel hidden, not removed
+           (refreshKbStats still writes here, so the element must persist). -->
+      <div id="kb-stats" class="triple" style="display:none">loading…</div>
+
+      <!-- Fix 3: existing seed controls rehomed under the new styling. IDs unchanged. -->
+      <div class="section-divider">
+        Seed Controls
+        <span style="color:var(--accent2)">offline · live</span>
+      </div>
+      <div class="seed-controls">
+        <div class="row">
+          <button id="seed-offline">seed offline fixture</button>
+        </div>
+        <div class="row">
+          <select id="seed-source">
+            <option value="conceptnet">ConceptNet</option>
+            <option value="wikidata">Wikidata</option>
+          </select>
+        </div>
+        <div class="row">
+          <input id="seed-concept" placeholder="seed term" />
+          <button id="seed-cn">seed</button>
+        </div>
+      </div>
+      <div id="kb-pressure"></div>
+    </div>
+
+    <!-- UI v3 — domain filter tabs + live KB source list (additive) -->
+    <div class="domain-tabs">
+      <button class="domain-tab active" onclick="filterDomain(this,'all')">All</button>
+      <button class="domain-tab" onclick="filterDomain(this,'coding')">Coding</button>
+      <button class="domain-tab" onclick="filterDomain(this,'fitness')">Fitness</button>
+      <button class="domain-tab" onclick="filterDomain(this,'health')">Health</button>
+      <button class="domain-tab" onclick="filterDomain(this,'general')">General</button>
+    </div>
+    <div class="section-divider">Loaded Sources</div>
+    <div class="kb-list" id="kb-list" style="max-height:200px"></div>
+
+    <h2>KAIROS</h2>
+    <div class="section">
+      <div id="kairos-status" class="triple">…</div>
+      <div class="row">
+        <button id="kairos-cycle">force one cycle</button>
+      </div>
+    </div>
+
+    <h2>Session Memory</h2>
+    <div class="section" id="session-memory"><div class="triple">empty</div></div>
+
+    <h2>Curiosity</h2>
+    <div class="section" id="curiosity"><div class="triple">no questions yet</div></div>
+  </aside>
+
+  <!-- Pass 2 — drag handle between left panel and centre column -->
+  <div class="resize-handle" id="handle-left" data-target="left"></div>
+
+  <!-- CENTRE: graph + chat -->
+  <section id="centre">
+    <div id="graph-card">
+      <div class="card-head">
+        <span>Synthetic Cortex — live</span>
+        <span id="graph-meta">0 nodes · 0 edges</span>
+        <button id="graph-reset" title="Reset zoom, release dragged nodes, re-run layout">reset view</button>
+      </div>
+      <svg id="graph-svg"></svg>
+    </div>
+    <div id="chat-card">
+      <div class="card-head">
+        <span id="chat-head">chat</span>
+        <span id="model-badge" class="badge">—</span>
+      </div>
+      <div id="chat-log"></div>
+      <!-- v3.1 Phase 1b — the local "work unit" affordance, without routes:
+           both fields are sent as BODY fields on the next /chat, exactly
+           as scope would be. `close` marks the next send with
+           decision_boundary: close and clears itself; the badge under the
+           head reads `done`, never an event. -->
+      <div id="unit-bar">
+        <input id="unit-input" placeholder="work unit (optional)" title="Sent as `work_unit` on each request; a row is created on first mention" />
+        <input id="accountable-input" placeholder="accountable" title="Sent as `accountable`; recorded, never authenticated" />
+        <button id="unit-close" title="Send decision_boundary: close with the next message">close unit</button>
+        <span id="unit-badge" class="badge">no unit</span>
+      </div>
+      <div id="compose">
+        <input id="msg-input" placeholder="ask nexus…" autofocus />
+        <input type="file" id="file-input" accept="image/*,.pdf,.docx" style="display:none">
+        <button id="attach-btn" title="Attach image / PDF / docx">📎</button>
+        <button id="send">send</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pass 2 — drag handle between centre column and right panel -->
+  <div class="resize-handle" id="handle-right" data-target="right"></div>
+
+  <!-- RIGHT PANEL: context inspector -->
+  <aside class="panel" id="right">
+    <h2>Active Model</h2>
+    <div class="section" id="active-model"><div class="triple">—</div></div>
+
+    <h2>Override</h2>
+    <div class="section" id="override-panel">
+      <div id="override-status" class="triple">none</div>
+      <div class="row">
+        <select id="override-role">
+          <option value="">— role —</option>
+          <option value="primary">primary</option>
+          <option value="code">code</option>
+          <option value="extraction">extraction</option>
+          <option value="multimodal">multimodal</option>
+        </select>
+        <label class="triple"><input id="override-lock" type="checkbox" /> lock</label>
+      </div>
+      <div class="row">
+        <input id="override-raw" placeholder="raw model name (experimental)" />
+      </div>
+      <div class="row">
+        <button id="override-set">set</button>
+        <button id="override-clear">clear</button>
+      </div>
+    </div>
+
+    <h2>Token Budget</h2>
+    <div class="section" id="token-budget"><div class="triple">—</div></div>
+
+    <h2>Injected Triples</h2>
+    <div class="section" id="injected"><div class="triple">none this turn</div></div>
+
+    <h2>Vector RAG</h2>
+    <div class="section" id="rag"><div class="triple">none this turn</div></div>
+
+    <h2>Prediction</h2>
+    <div class="section" id="prediction"><div class="triple">no prediction yet</div></div>
+
+    <h2>Compaction</h2>
+    <div class="section" id="compaction"><div class="triple">idle</div></div>
+    <div class="section" id="integrity"><span id="integrity-badge" class="pill gen">—</span></div>
+
+    <h2>Extracted</h2>
+    <div class="section" id="extracted"><div class="triple">none this turn</div></div>
+
+    <h2>Contradictions</h2>
+    <div class="section" id="contradictions"><div class="triple">none this turn</div></div>
+
+    <h2>Curiosity</h2>
+    <div class="section" id="curiosity-panel"><div class="triple">no questions yet</div></div>
+
+    <h2>Eval (RAGAS)</h2>
+    <div class="section" id="eval"><div class="triple">—</div></div>
+
+    <h2>Archive Chain</h2>
+    <div class="section" id="chain-status"><div class="triple">…</div></div>
+
+    <!-- UI v3 — system stats / VRAM (additive) -->
+    <div class="sys-stats">
+      <div class="section-divider" style="margin:0 -14px 8px;padding:5px 14px">System</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:4px;
+                  letter-spacing:0.1em;text-transform:uppercase">VRAM Usage</div>
+      <div class="vram-bar">
+        <div class="vram-fill" id="vram-fill" style="width:0%"></div>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Model</span>
+        <span class="stat-val ok" id="s-model">— GB</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Embeddings</span>
+        <span class="stat-val ok" id="s-embed">0.3 GB</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Headroom</span>
+        <span class="stat-val warn" id="s-headroom">— GB</span>
+      </div>
+      <div class="stat-row" style="margin-top:6px">
+        <span class="stat-label">Tok/s</span>
+        <span class="stat-val ok" id="s-tps">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Ollama</span>
+        <span class="stat-val ok" id="s-ollama">● online</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">KB (SQLite)</span>
+        <span class="stat-val ok" id="s-kb">● online</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+// ============== Helpers ==============
+const $ = sel => document.querySelector(sel);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const fmt = (n, d=2) => Number(n).toFixed(d);
+
+// Tiny toast helper. Auto-disappears after 2.5s. Stacks if called rapidly.
+function showToast(msg, kind = 'info') {
+  let host = document.getElementById('toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toast-host';
+    host.style.cssText = 'position:fixed;bottom:16px;right:16px;display:flex;flex-direction:column;gap:6px;z-index:9999;pointer-events:none';
+    document.body.appendChild(host);
+  }
+  const t = document.createElement('div');
+  t.textContent = msg;
+  const colour = kind === 'error' ? '#5a2a2a'
+               : kind === 'warn'  ? '#5a4030'
+               : '#2a5a48';
+  t.style.cssText = `background:#14141a;border:1px solid ${colour};color:var(--ink);
+    padding:8px 12px;border-radius:4px;font-size:11px;max-width:340px;
+    box-shadow:0 4px 12px rgba(0,0,0,.4);opacity:0;transition:opacity .15s;
+    pointer-events:auto`;
+  host.appendChild(t);
+  requestAnimationFrame(() => { t.style.opacity = '1'; });
+  setTimeout(() => {
+    t.style.opacity = '0';
+    setTimeout(() => t.remove(), 200);
+  }, 2500);
+}
+
+// ============== State ==============
+let nodes = [], links = [];
+const nodeIndex = new Map();   // id -> node object (for d3 mutation)
+let simulation = null;
+// Packet N.1 — the topology the simulation was last warmed for, and whether
+// it has settled. `render()` re-warms ONLY when these say it must.
+let lastTopology = null;
+let simulationFrozen = false;
+
+// ============== Packet N.1 — population caps and layout policy ==============
+//
+// MEASURED, not chosen by taste (N.0, headless Chromium via CDP against these
+// exact functions):
+//
+//   nodes  edges | force ms | DOM ms | ms/tick | settle
+//     100    200 |     1.14 |   0.78 |    1.92 |   7.1s
+//     300    800 |     1.67 |   2.86 |    4.53 |   7.5s
+//     500   2000 |     3.89 |   7.48 |   11.37 |  13.8s
+//     800   4485 |     6.02 |  22.89 |   28.91 |  22.0s
+//
+// Two findings drive everything below.
+//
+// 1. THE COST IS DOM WRITES, NOT PHYSICS. At 800/4485 the force computation
+//    is 6.02ms and the tick handler is 22.89ms — 79%. Of that, `selectAll`
+//    is only 0.24ms, so it is not the queries: it is ~19,000 SVG attribute
+//    mutations per frame. Fewer elements is the only lever that matters.
+//
+// 2. SETTLE IS ALWAYS 424 TICKS, because alpha decays per TICK, not per
+//    second. So settle time in wall clock is 424 / achievable-fps, and it
+//    grows as the graph grows. `render()` ended with an UNCONDITIONAL
+//    `simulation.alpha(0.6).restart()`, and `loadSnapshot()` runs at the end
+//    of every turn — so with turns arriving every 3s, measured:
+//
+//      turn 1 alpha 0.154 | 2 0.104 | 3 0.091 | 4 0.087 | 5 0.089 | 6 0.091
+//      settled: never. 1009 ticks over 18s, still running.
+//
+//    The simulation never reached alphaMin for the whole session. That is the
+//    operator's "several chat iterations render the UI unusable", and it is a
+//    measurement rather than a hypothesis.
+//
+// At 150/400 the same measurement gives 2.11 ms/tick — comfortably inside a
+// 16ms frame with paint left over.
+const GRAPH_CAPS = { nodes: 150, edges: 400, labels: 40 };
+
+// Re-warm alpha on a topology change. Not 0.6: the layout already exists and
+// only needs to absorb what arrived. With alphaDecay 0.05 this settles in
+// ~98 ticks (~1.6s) instead of 424.
+const REWARM_ALPHA = 0.15;
+const ALPHA_DECAY  = 0.05;
+
+// Which nodes survive the cap. Deliberately the same quantities the panel
+// already renders with — fire_count drives radius, activation drives the
+// pulse — so what you see is what was ranked.
+function nodeImportance(n) {
+  return (n.fire_count || 0) * 10
+       + (n.activation || 0) * 5
+       + (n.evidential_weight ?? n.confidence ?? 0);
+}
+
+// Keep the most important nodes, then the strongest edges BETWEEN THEM. An
+// edge to a dropped node cannot be drawn — d3's forceLink would throw on an
+// unresolvable id — so the edge cap is applied after the node cap, never
+// independently.
+function capGraph(rawNodes, rawEdges, caps) {
+  const kept = rawNodes.slice()
+    .sort((a, b) => nodeImportance(b) - nodeImportance(a))
+    .slice(0, caps.nodes);
+  const keptIds = new Set(kept.map(n => n.id));
+  const edgeId = (v) => (v && v.id !== undefined) ? v.id : v;
+  const eligible = rawEdges.filter(
+    e => keptIds.has(edgeId(e.source)) && keptIds.has(edgeId(e.target)));
+  const links = eligible.slice()
+    .sort((a, b) => ((b.current_weight ?? b.weight ?? 0)
+                   - (a.current_weight ?? a.weight ?? 0)))
+    .slice(0, caps.edges);
+  return {
+    nodes: kept, links,
+    droppedNodes: rawNodes.length - kept.length,
+    droppedEdges: rawEdges.length - links.length,
+  };
+}
+
+// Label culling, tier one: only the most important nodes carry a label at
+// all. N.0 measured labels at roughly a third of the per-frame DOM writes
+// (2 attributes per label per tick), and an unreadable thicket of overlapping
+// text was never useful anyway. Zoom-dependent tiers layer on top of this.
+function labelledIds(keptNodes, limit) {
+  return new Set(keptNodes.slice()
+    .sort((a, b) => nodeImportance(b) - nodeImportance(a))
+    .slice(0, limit).map(n => n.id));
+}
+
+// ============== Packet N.1b — focus, zoom and spring-back policy ==========
+//
+// FOCUS + CONTEXT, NEVER HIDING. Non-focal nodes fade to a floor, they do not
+// disappear. A graph that hides its context stops being a graph and becomes a
+// list — and the operator's reason for having the panel at all is seeing what
+// a belief sits NEXT to. 0.1 is low enough to recede and high enough to keep
+// shape, and `focusOpacity` can never return less than it.
+const GHOST_FLOOR = 0.1;
+
+// Release alpha after a drag. Chosen so the spring-back lands inside the
+// 1-2s the design asked for rather than snapping: with ALPHA_DECAY 0.05,
+// alpha 0.1 needs ln(0.001/0.1)/ln(0.95) = 90 ticks, ~1.5s at 60fps. The
+// physics delivers the easing, so there is no per-frame bookkeeping and no
+// second animation clock to keep in step with the simulation.
+const DRAG_RELEASE_ALPHA = 0.1;
+
+// Label tiers by zoom (N.1b). Zoomed out, labels overlap into an unreadable
+// thicket AND cost two attribute writes each per frame; zoomed in there is
+// room for them and far fewer on screen. `caps.labels` stays the ceiling —
+// this only ever culls further, never past it.
+function labelLimitForZoom(k, caps) {
+  const ceiling = caps.labels;
+  if (k < 0.75) return Math.min(ceiling, 8);
+  if (k < 1.75) return Math.min(ceiling, 20);
+  return ceiling;
+}
+
+// Opacity for one node given the current focus. `focusId` null means no
+// focus: everything is fully visible, which is the resting state.
+function focusOpacity(nodeId, focusId, neighbourIds) {
+  if (!focusId) return 1;
+  if (nodeId === focusId) return 1;
+  if (neighbourIds && neighbourIds.has(nodeId)) return 0.55;
+  return GHOST_FLOOR;
+}
+
+// Edges fade with the dimmer of their endpoints, so an edge never appears
+// brighter than the node it leads to.
+function edgeOpacity(edge, focusId, neighbourIds, baseOpacity) {
+  const id = (v) => (v && v.id !== undefined) ? v.id : v;
+  if (!focusId) return baseOpacity;
+  const a = focusOpacity(id(edge.source), focusId, neighbourIds);
+  const b = focusOpacity(id(edge.target), focusId, neighbourIds);
+  return baseOpacity * Math.min(a, b);
+}
+
+function neighboursOf(focusId, ls) {
+  const id = (v) => (v && v.id !== undefined) ? v.id : v;
+  const out = new Set();
+  for (const e of ls) {
+    if (id(e.source) === focusId) out.add(id(e.target));
+    else if (id(e.target) === focusId) out.add(id(e.source));
+  }
+  return out;
+}
+
+function hashString(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+// What the simulation was warmed for. Two snapshots with the same nodes and
+// the same edges produce the same signature, whether or not d3 has resolved
+// source/target from ids to node objects — which it does in place, so a naive
+// comparison would report a change on every turn and defeat the whole fix.
+function topologySignature(ns, ls) {
+  const endpoint = (v) => (v && v.id !== undefined) ? v.id : v;
+  const nids = ns.map(n => n.id).sort().join('');
+  const lids = ls.map(e => `${endpoint(e.source)}>${endpoint(e.target)}`)
+                 .sort().join('');
+  return `${ns.length}:${ls.length}:${hashString(nids)}:${hashString(lids)}`;
+}
+
+// I-6 — declared, not silent. Archiving 419 rows while every counter held
+// steady was L.0.10's complaint about `/kb/stats`; a graph that quietly draws
+// 150 of 800 nodes is the same defect on a different surface. If nothing was
+// dropped the text is unchanged from before this packet.
+function graphMetaText(meta, capped) {
+  const n = (meta && meta.n_nodes) ?? capped.nodes.length;
+  const e = (meta && meta.n_edges) ?? capped.links.length;
+  if (!capped.droppedNodes && !capped.droppedEdges) {
+    return `${n} nodes · ${e} edges`;
+  }
+  return `${capped.nodes.length} of ${n} nodes · `
+       + `${capped.links.length} of ${e} edges · capped for render`;
+}
+
+// ============== D3 force graph ==============
+const svg = d3.select('#graph-svg');
+let svgWidth = 0, svgHeight = 0;
+function resize() {
+  const r = svg.node().getBoundingClientRect();
+  svgWidth = r.width; svgHeight = r.height;
+  svg.attr('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
+  if (simulation) {
+    simulation.force('center', d3.forceCenter(svgWidth/2, svgHeight/2));
+    wakeSim(0.3);        // N.1 — a resize is a real reason to move
+  }
+}
+window.addEventListener('resize', resize);
+
+// N.1b — one transformed root so zoom/pan moves the whole scene with a
+// single attribute write per frame, rather than re-projecting every node.
+const gRoot = svg.append('g').attr('class', 'viewport');
+const gLinks = gRoot.append('g').attr('class', 'links');
+const gNodes = gRoot.append('g').attr('class', 'nodes');
+const gLabels = gRoot.append('g').attr('class', 'labels');
+
+let zoomK = 1;                       // current scale, drives the label tier
+let focusId = null;                  // hovered node, or null at rest
+
+const zoomBehaviour = d3.zoom()
+  .scaleExtent([0.2, 6])
+  .on('zoom', (event) => {
+    gRoot.attr('transform', event.transform);
+    // Zoom NEVER wakes the simulation. It is a view change, not a layout
+    // change — waking here would undo N.1a's freeze on every scroll wheel.
+    if (Math.abs(event.transform.k - zoomK) > 0.001) {
+      zoomK = event.transform.k;
+      applyLabelTier();
+    }
+  });
+svg.call(zoomBehaviour);
+
+// Fix 8 — epistemic colours match the mock; key set matches our backend
+// EpistemicState values exactly. `known_unknown` is the canonical key — we
+// do NOT rename to `unknown` (would mismatch backend payloads).
+const EPISTEMIC_COLOURS = {
+  known:         '#00e5ff',
+  partial:       '#f59e0b',
+  contradicted:  '#ef4444',
+  inferred:      '#7c3aed',
+  known_unknown: '#4a5568',
+};
+const colourFor = (epi) => EPISTEMIC_COLOURS[epi] || EPISTEMIC_COLOURS.known_unknown;
+
+// Fix 8 — SVG <defs> with a soft Gaussian blur filter applied to nodes for
+// the glow effect. Defined once at module load so startSim/render don't
+// have to manage it.
+(function ensureGlowFilter() {
+  if (svg.select('defs #glow').empty()) {
+    const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
+    const f = defs.append('filter').attr('id', 'glow');
+    f.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'blur');
+    const merge = f.append('feMerge');
+    merge.append('feMergeNode').attr('in', 'blur');
+    merge.append('feMergeNode').attr('in', 'SourceGraphic');
+  }
+})();
+
+function startSim() {
+  // Fix 8 — looser physics so nodes drift after drag instead of snapping
+  simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(60).strength(0.2))
+    .force('charge', d3.forceManyBody().strength(-120))
+    .force('center', d3.forceCenter(svgWidth/2 || 400, svgHeight/2 || 300))
+    .force('collide', d3.forceCollide().radius(14))
+    // N.1 — 0.015 meant 424 ticks to settle, every time. 0.05 means ~135
+    // from a cold start and ~98 from a re-warm.
+    .alphaDecay(ALPHA_DECAY)
+    .velocityDecay(0.25)
+    .on('tick', tick)
+    // N.1 — SETTLE AND FREEZE. d3 stops its own timer at alphaMin and then
+    // fires 'end'; this makes the stop explicit and, more importantly,
+    // records it so `render()` can tell "settled" from "still moving".
+    .on('end', freezeSim);
+}
+
+function freezeSim() {
+  if (simulation) simulation.stop();
+  simulationFrozen = true;
+}
+
+// Anything that legitimately needs motion again says so. N.0.7 enumerated
+// every reader of live simulation state: resize, drag, and a topology change.
+// Nothing else reads it — pulseNode toggles a CSS class, hover uses <title>,
+// and node positions are persisted nowhere — so a frozen graph loses nothing.
+function wakeSim(alpha) {
+  if (!simulation) return;
+  simulationFrozen = false;
+  simulation.alpha(alpha).restart();
+}
+
+function render() {
+  const link = gLinks.selectAll('line.edge').data(links, d => `${d.source.id||d.source}->${d.target.id||d.target}`);
+  link.exit().remove();
+  link.enter().append('line').attr('class', 'edge')
+    .merge(link)
+    .attr('stroke', '#3a3a48')
+    // Fix 8 — edge opacity AND stroke-width both reflect current_weight()
+    .style('opacity',     d => 0.2 + (d.current_weight || d.weight || 0.5) * 0.6)
+    .attr('stroke-width', d => 1   + (d.current_weight || d.weight || 0.5) * 2);
+
+  const node = gNodes.selectAll('circle.node').data(nodes, d => d.id);
+  node.exit().remove();
+  const enter = node.enter().append('circle').attr('class', 'node')
+    .attr('r', d => 4 + Math.min(8, (d.fire_count || 0)))
+    .attr('fill', d => colourFor(d.epistemic_state))
+    .attr('stroke', '#0b0b0e')
+    .style('filter', 'url(#glow)')   // Fix 8 — node glow
+    // N.1b — focus + context on hover. Handlers only; the opacity policy
+    // lives in focusOpacity() so it can be tested without a browser.
+    .on('mouseenter', (event, d) => setFocus(d.id))
+    .on('mouseleave', () => setFocus(null))
+    .call(drag());
+  enter.append('title').text(d => `${d.id} [${d.epistemic_state}, evidential weight=${fmt(d.evidential_weight ?? d.confidence)}]`);
+
+  // N.1 — label culling. Tier one caps by importance; N.1b narrows further
+  // by zoom, so a zoomed-out graph carries a handful rather than a thicket.
+  const labelSet = labelledIds(nodes, labelLimitForZoom(zoomK, GRAPH_CAPS));
+  const label = gLabels.selectAll('text.label')
+    .data(nodes.filter(n => labelSet.has(n.id)), d => d.id);
+  label.exit().remove();
+  // `.text()` sets textContent, which escapes by construction — verified
+  // behaviourally in N.0 by feeding `<script>` and `<img onerror=>` node ids
+  // through this exact function in Chromium: zero elements created, zero
+  // execution, the hostile string present as literal text. Pre-gate rows are
+  // still in the store untouched (I-9), so this panel renders them and the
+  // property must hold. NEVER use .html() or innerHTML here.
+  label.enter().append('text').attr('class', 'label').text(d => d.id);
+
+  if (simulation) {
+    simulation.nodes(nodes);
+    simulation.force('link').links(links);
+    // N.1 — THE CONDITIONAL RESTART. This was an unconditional
+    // `alpha(0.6).restart()`, and `loadSnapshot()` runs at the end of every
+    // turn, so the layout was re-thrown from scratch on each one and never
+    // reached alphaMin. Re-warm only when the graph is actually different.
+    const sig = topologySignature(nodes, links);
+    if (sig !== lastTopology) {
+      lastTopology = sig;
+      wakeSim(REWARM_ALPHA);
+    }
+  }
+}
+
+// N.1b — applied without touching the simulation. Both of these run on
+// hover and on zoom, which happen while the graph is FROZEN; if either woke
+// it, N.1a's fix would be undone by the first mouse movement.
+function applyFocus() {
+  const neighbours = focusId ? neighboursOf(focusId, links) : null;
+  gNodes.selectAll('circle.node')
+    .style('opacity', d => focusOpacity(d.id, focusId, neighbours));
+  gLabels.selectAll('text.label')
+    .style('opacity', d => focusOpacity(d.id, focusId, neighbours));
+  gLinks.selectAll('line.edge')
+    .style('opacity', d => edgeOpacity(
+        d, focusId, neighbours, 0.2 + (d.current_weight || d.weight || 0.5) * 0.6));
+}
+
+function setFocus(id) {
+  if (focusId === id) return;
+  focusId = id;
+  applyFocus();
+}
+
+function applyLabelTier() {
+  const keep = labelledIds(nodes, labelLimitForZoom(zoomK, GRAPH_CAPS));
+  const sel = gLabels.selectAll('text.label').data(
+    nodes.filter(n => keep.has(n.id)), d => d.id);
+  sel.exit().remove();
+  sel.enter().append('text').attr('class', 'label').text(d => d.id);
+  applyFocus();
+  if (simulationFrozen) tick();   // frozen: nothing else will place them
+}
+
+// N.1b — the explicit reset the design asked for. Clears the view transform
+// and re-runs the layout, which is the only way back from a graph the
+// operator has dragged into a knot.
+function resetGraphView() {
+  svg.transition().duration(400).call(zoomBehaviour.transform, d3.zoomIdentity);
+  zoomK = 1;
+  nodes.forEach(n => { n.fx = null; n.fy = null; });
+  setFocus(null);
+  wakeSim(0.6);
+}
+
+function tick() {
+  gLinks.selectAll('line.edge')
+    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  gNodes.selectAll('circle.node').attr('cx', d => d.x).attr('cy', d => d.y);
+  gLabels.selectAll('text.label').attr('x', d => d.x + 8).attr('y', d => d.y + 3);
+}
+
+function drag() {
+  return d3.drag()
+    .on('start', (event, d) => { if (!event.active) { simulationFrozen = false;
+        simulation.alphaTarget(0.3).restart(); } d.fx = d.x; d.fy = d.y; })
+    .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+    // N.1b — SLOW SPRING-BACK. Releasing the pin and dropping alphaTarget to
+    // 0 left the node to snap wherever the residual alpha put it. Releasing
+    // into a small explicit alpha lets the existing forces carry it back over
+    // ~90 ticks (~1.5s), which is the easing the design asked for — delivered
+    // by the physics, so there is no second animation clock to keep in step.
+    .on('end', (event, d) => {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null; d.fy = null;
+      wakeSim(DRAG_RELEASE_ALPHA);
+    });
+}
+
+function pulseNode(id) {
+  gNodes.selectAll('circle.node').filter(d => d.id === id)
+    .classed('firing', true)
+    .each(function () { setTimeout(() => d3.select(this).classed('firing', false), 600); });
+}
+
+async function loadSnapshot() {
+  const r = await fetch('/graph/snapshot');
+  if (!r.ok) return;
+  const snap = await r.json();
+  // Preserve current x/y if a node already existed
+  const oldById = new Map(nodes.map(n => [n.id, n]));
+  // N.1 — cap before anything touches the DOM. Nothing upstream bounds this:
+  // /graph/snapshot returns every hippocampus node and edge with no limit,
+  // while /memory/column has capped at [:80]/[:200] since it was written.
+  const capped = capGraph(snap.nodes, snap.edges, GRAPH_CAPS);
+  nodes = capped.nodes.map(n => Object.assign({}, oldById.get(n.id) || {}, n));
+  nodeIndex.clear(); nodes.forEach(n => nodeIndex.set(n.id, n));
+  links = capped.links.map(e => ({...e}));
+  $('#graph-meta').textContent = graphMetaText(snap.metadata, capped);
+  if (!simulation) startSim(); else { simulation.nodes(nodes); simulation.force('link').links(links); }
+  render();
+}
+
+// ============== KB / KAIROS controls ==============
+async function refreshKbStats() {
+  const r = await fetch('/kb/stats'); if (!r.ok) return;
+  const s = await r.json();
+  const stats = $('#kb-stats');
+  stats.innerHTML = '';
+  stats.appendChild(el('div', 'triple', `${s.total} triples total`));
+  for (const [g, n] of Object.entries(s.by_granularity)) {
+    stats.appendChild(el('div', 'triple', `${g}: ${n}`));
+  }
+}
+async function refreshKairos() {
+  const r = await fetch('/kairos/status'); if (!r.ok) return;
+  const s = await r.json();
+  $('#kairos-status').innerHTML = '';
+  $('#kairos-status').appendChild(el('div', 'triple', `idle: ${s.is_idle}`));
+  if (s.last_cycle) {
+    // D.2 — honest counter labels; fall back to the deprecated keys so an
+    // older backend still renders.
+    const _lc = s.last_cycle;
+    const _ep = _lc.edges_promoted ?? _lc.consolidated;
+    const _ev = _lc.hebbian_edges_visited ?? _lc.decayed;
+    $('#kairos-status').appendChild(el('div', 'triple', `last: edges_promoted=${_ep} patterns=${_lc.promoted_patterns} hebbian_edges_visited=${_ev}`));
+    if (_lc.snapshot_skipped_reason) {
+      $('#kairos-status').appendChild(el('div', 'triple', `snapshot skipped: ${_lc.snapshot_skipped_reason}`));
+    }
+    if (_lc.dedup_scan_failed) {
+      $('#kairos-status').appendChild(el('div', 'triple', `dedup scan failed: ${_lc.dedup_error}`));
+    }
+  }
+}
+$('#seed-offline').onclick = async () => {
+  const r = await fetch('/kb/seed/offline?confirmed=true', {method: 'POST'});
+  await refreshKbStats();
+};
+$('#seed-cn').onclick = async () => {
+  const term   = $('#seed-concept').value.trim();
+  const source = ($('#seed-source')?.value || 'conceptnet').toLowerCase();
+  if (!term) return;
+  const endpoint = source === 'wikidata'
+    ? '/kb/seed/wikidata'
+    : '/kb/seed/conceptnet';
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({concepts: [term], confirmed: true}),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      showToast(`Seeded ${d.seeded} triples from ${d.source}`);
+    } else {
+      showToast(`Seed failed (HTTP ${r.status})`, 'error');
+    }
+  } catch (e) {
+    showToast('Seed network error', 'error');
+  }
+  $('#seed-concept').value = '';
+  await refreshKbStats();
+  await loadSnapshot();
+};
+$('#graph-reset').onclick = () => resetGraphView();
+
+$('#kairos-cycle').onclick = async () => {
+  await fetch('/kairos/cycle', {method: 'POST'});
+  await refreshKairos();
+};
+
+// ============== Model override ==============
+async function refreshOverride() {
+  const r = await fetch('/model/status'); if (!r.ok) return;
+  const s = await r.json();
+  const out = $('#override-status'); out.innerHTML = '';
+  if (s.override) {
+    const tag = el('div', 'alert',
+      `${s.locked ? 'LOCKED' : 'OVERRIDE'} → ${s.override}`);
+    out.appendChild(tag);
+  } else {
+    out.appendChild(el('div', 'triple', 'no override'));
+  }
+  $('#model-badge').textContent = (s.active_model || '—').split(':')[0];
+}
+$('#override-set').onclick = async () => {
+  const role = $('#override-role').value;
+  const raw  = $('#override-raw').value.trim();
+  const model = role || raw;
+  if (!model) return;
+  const lock = $('#override-lock').checked;
+  const r = await fetch('/model/override', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({model, lock}),
+  });
+  $('#override-raw').value = ''; $('#override-role').value = '';
+  await refreshOverride();
+};
+$('#override-clear').onclick = async () => {
+  await fetch('/model/override', {method: 'DELETE'});
+  await refreshOverride();
+};
+
+// ============== Archive chain ==============
+async function refreshChainStatus() {
+  const r = await fetch('/chain/status'); if (!r.ok) return;
+  const s = await r.json();
+  const out = $('#chain-status'); out.innerHTML = '';
+  out.appendChild(el('div', 'triple', `${s.n_blocks} block(s)`));
+  if (s.latest_block) {
+    const hashPrefix = (s.latest_block.block_hash || '').slice(0, 12);
+    out.appendChild(el('div', 'triple',
+      `head #${s.latest_block.index} · ${hashPrefix}…`));
+  }
+  if (s.verification) {
+    const v = s.verification;
+    const cls = v.valid ? 'badge-pass' : 'badge-fail';
+    const label = v.valid ? 'verified' : `broken@${v.broken_at}`;
+    const wrap = el('div', 'triple');
+    const pill = el('span', cls, label);
+    wrap.appendChild(pill);
+    out.appendChild(wrap);
+  }
+}
+
+// ============== Chat + SSE handling ==============
+const log = $('#chat-log');
+const input = $('#msg-input');
+const send = $('#send');
+
+function appendMsg(role, text) {
+  const w = el('div', `msg ${role === 'user' ? 'user' : 'asst'}`);
+  w.appendChild(el('div', 'who', role));
+  const body = el('div', 'body', text);
+  w.appendChild(body);
+  log.appendChild(w);
+  log.scrollTop = log.scrollHeight;
+  return body;
+}
+
+/* ------------------------------------------------------------------ *
+ * H.2 — per-answer provenance surface
+ *
+ * What an answer rested on, as it was recorded at the time. Every value
+ * below comes from the lineage record or from a field the server named;
+ * nothing is derived here, because a UI that recomputes evidence is
+ * showing today's belief state in place of the state the answer used —
+ * which is I-5's failure rendered in pixels.
+ *
+ * It does not flatter. Thin evidence looks thin, uncited beliefs are
+ * listed, unresolved beliefs are named rather than dropped, and a broken
+ * seal is red.
+ * ------------------------------------------------------------------ */
+
+function _esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g,
+    ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function _num(v, d = 2) {
+  return (typeof v === 'number' && isFinite(v)) ? v.toFixed(d) : '—';
+}
+
+function renderSealState(verify) {
+  // Amendment 3: `verify.sealed`, never `sealed_block` truthiness — block
+  // indices start at 0, so `if (rec.sealed_block)` calls the FIRST block
+  // unsealed.
+  if (!verify || verify.exists === false) {
+    return '<span class="seal-wait">no verification available</span>';
+  }
+  if (verify.record_intact === false) {
+    return '<span class="seal-bad">RECORD ALTERED — content no longer hashes to its stored hash</span>';
+  }
+  if (verify.sealed === true) {
+    return '<span class="seal-ok">sealed into chain block ' +
+           _esc(verify.sealed_block) + '</span> · content hash verified';
+  }
+  // Awaiting the next KAIROS cycle. A normal state, not a failure (I-6).
+  return '<span class="seal-wait">awaiting seal</span> · content hash verified';
+}
+
+function renderBeliefRow(b) {
+  if (!b.resolved) {
+    // Never omitted. A record whose belief no longer resolves is still the
+    // record; a quietly shortened list is not provenance.
+    return '<div class="row"><span class="unresolved">belief #' +
+      _esc(b.belief_id) + ' no longer resolves</span> ' +
+      '<span class="w">— injected at <span class="w-inj">w ' +
+      _num(b.weight_at_injection) + '</span>, tier ' +
+      _esc(b.tier_at_injection) + '</span></div>';
+  }
+  const cited = b.cited
+    ? '<span class="pill fitness">cited</span>'
+    : '<span class="pill gen">not cited</span>';
+  const archived = b.archived ? '<span class="pill health">archived</span>' : '';
+  // Three weights, three labels (I-5). They are different objects and are
+  // never rendered as one number that "changed".
+  const weights =
+    '<span class="w-inj">at injection ' + _num(b.weight_at_injection) +
+      '</span> · tier ' + _esc(b.tier_at_injection) + ' → ' +
+    '<span class="w-now">prominence now ' + _num(b.current_prominence) +
+      '</span> · tier ' + _esc(b.current_tier) + ' · ' +
+    '<span class="w-high">high-water ' + _num(b.high_water_weight) + '</span>';
+  return '<div class="row">' + cited + archived +
+    '<span class="spo">' + _esc(b.subject) + ' ' + _esc(b.relation) + ' ' +
+    _esc(b.object) + '</span>' +
+    '<div class="w">' + weights + ' · <i>' + _esc(b.source) + '</i></div>' +
+    '</div>';
+}
+
+async function renderProvenance(lineageId, host) {
+  host.innerHTML = '<div class="triple">loading provenance…</div>';
+  let rec, ver;
+  try {
+    const [r1, r2] = await Promise.all([
+      fetch('/lineage/' + encodeURIComponent(lineageId)),
+      fetch('/lineage/' + encodeURIComponent(lineageId) + '/verify'),
+    ]);
+    if (!r1.ok) throw new Error('lineage ' + r1.status);
+    rec = await r1.json();
+    ver = r2.ok ? await r2.json() : null;
+  } catch (e) {
+    // Declared, not swallowed (I-6). A provenance view that fails silently
+    // is indistinguishable from one showing an answer with no evidence.
+    host.innerHTML = '<div class="triple unresolved">provenance unavailable: ' +
+      _esc(e.message) + '</div>';
+    return;
+  }
+
+  const injected = rec.injected || [];
+  const citedN = injected.filter(b => b.cited).length;
+  const contradictions = rec.contradictions || [];
+
+  let html = '<h4>seal</h4><div class="row">' + renderSealState(rec.verify) + '</div>';
+
+  if (ver && ver.layers) {
+    // The verdict is the headline, not the per-layer counts: a naive tamper
+    // leaves seal ok=N/N, and "seal 3/3" beside an altered record would read
+    // as reassurance.
+    const v = ver.verdict;
+    const cls = v === 'intact' ? 'seal-ok' : 'seal-bad';
+    html += '<div class="row"><span class="' + cls + '">verification: ' +
+      _esc(v) + '</span> <span class="w">(row ' +
+      _esc(ver.layers.row.ok) + '/' + _esc(ver.layers.row.ok + ver.layers.row.failed) +
+      ' · seal ' + _esc(ver.layers.seal.ok) + ' sealed, ' +
+      _esc(ver.layers.seal.unsealed) + ' awaiting · chain ' +
+      (ver.layers.chain.ok === null ? 'n/a' : (ver.layers.chain.ok ? 'ok' : 'BROKEN')) +
+      ')</span></div>';
+  }
+
+  html += '<h4>answered by</h4><div class="row"><span class="spo">' +
+    _esc(rec.model_id) + '</span></div>';
+
+  html += '<h4>beliefs injected (' + injected.length + ', ' + citedN +
+    ' cited by the answer)</h4>';
+  html += injected.length
+    ? injected.map(renderBeliefRow).join('')
+    : '<div class="row"><span class="w">none — this answer rested on no ' +
+      'stored belief</span></div>';
+
+  html += '<h4>contradictions surfaced (' + contradictions.length + ')</h4>';
+  html += contradictions.length
+    ? contradictions.map(c => '<div class="row contra">' + _esc(c.subject) +
+        ': ' + _esc(c.relation_a) + ' vs ' + _esc(c.relation_b) + ' → ' +
+        _esc(c.object) + '</div>').join('')
+    : '<div class="row"><span class="w">none</span></div>';
+
+  html += '<h4>record</h4><div class="row"><span class="w">' +
+    _esc(rec.lineage_id) + ' · hash ' + _esc(String(rec.record_hash).slice(0, 16)) +
+    '…</span></div>';
+
+  host.innerHTML = html;
+}
+
+function attachProvenance(msgBody, lineageId) {
+  if (!msgBody || !lineageId) return;
+  const wrap = msgBody.parentElement;
+  if (!wrap || wrap.querySelector('.prov-toggle')) return;
+  const btn = el('button', 'prov-toggle', 'provenance');
+  const panel = el('div', 'prov');
+  panel.style.display = 'none';
+  let loaded = false;
+  btn.onclick = async () => {
+    const open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    btn.textContent = open ? 'provenance' : 'hide provenance';
+    if (!open && !loaded) { loaded = true; await renderProvenance(lineageId, panel); }
+  };
+  wrap.appendChild(btn);
+  wrap.appendChild(panel);
+}
+
+// Fix 0 — render the web search proposal card inside #chat-log.
+// Replaces any prior card for the same flow so we don't stack.
+function renderSearchProposal(query, reasons) {
+  const log = $('#chat-log');
+  if (!log) return;
+  const existing = log.querySelector('.search-proposal');
+  if (existing) existing.remove();
+
+  const card = document.createElement('div');
+  card.className = 'search-proposal';
+  card.dataset.query = query || '';
+  const reasonLine = (reasons && reasons.length)
+    ? reasons.join(' · ')
+    : 'temporal keyword detected';
+  card.innerHTML = `
+    <strong>⚡ Web search proposed</strong><br>
+    <span>${reasonLine}</span>
+    <div class="proposal-actions">
+      <button class="btn-confirm">Search</button>
+      <button class="btn-dismiss">Dismiss</button>
+    </div>`;
+  card.querySelector('.btn-confirm').addEventListener('click',
+    () => confirmSearch(card));
+  card.querySelector('.btn-dismiss').addEventListener('click',
+    () => card.remove());
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
+}
+
+// W10b — a search the runtime could not record: its row could not be written, so it
+// was not sent, or its outcome could not be written, so its result is withheld. The
+// server's words say which; the card names the refusal and offers nothing (law 5). It
+// removes no card: an offer already showing (the assertion offer, sent first) stays.
+function renderSearchNotSent(detail) {
+  const log = $('#chat-log');
+  if (!log) return;
+
+  const card = document.createElement('div');
+  card.className = 'search-proposal';
+  card.innerHTML = `
+    <strong style="color:var(--danger)">⚠ Web search not recorded</strong><br>
+    <span>${_esc(detail || 'action_not_recorded')}</span>
+    <div class="proposal-actions">
+      <button class="btn-dismiss">Dismiss</button>
+    </div>`;
+  card.querySelector('.btn-dismiss').addEventListener('click',
+    () => card.remove());
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
+}
+
+// S.4 — the assertion offer. O.2b built detection and /kb/assert/confirm and
+// built no offer, so a recognised assertion was never shown to anyone.
+//
+// textContent throughout, never innerHTML with the sentence in it: this text
+// came from the user and is echoed back into the page. render() carries the
+// same rule for the same reason.
+function renderAssertionProposal(data) {
+  const log = $('#chat-log');
+  if (!log) return;
+
+  const card = document.createElement('div');
+  card.className = 'search-proposal assertion-proposal';
+  card.dataset.sentence = data.sentence || '';
+
+  const head = el('strong', null,
+    data.shaped ? '✎ Store this as a belief?' : '✎ Stated, but not storable');
+  head.style.color = data.shaped ? 'var(--accent)' : 'var(--warn)';
+  card.appendChild(head);
+  card.appendChild(document.createElement('br'));
+  card.appendChild(el('span', null, data.sentence || ''));
+
+  // What WOULD be stored, shown before it is. Law 3 asks for confirmation;
+  // confirming something you cannot see is not confirmation.
+  (data.triples || []).forEach(t => {
+    card.appendChild(el('div', 'triple',
+      `${t.subject} | ${t.relation} | ${t.object}`));
+  });
+  if (!data.shaped) {
+    card.appendChild(el('div', 'triple',
+      'no subject-verb-object could be derived — rephrase as a statement'));
+  }
+
+  const actions = el('div', 'proposal-actions');
+  if (data.shaped) {
+    const yes = el('button', 'btn-confirm', 'Store');
+    yes.addEventListener('click', () => confirmAssertion(card));
+    actions.appendChild(yes);
+  }
+  const no = el('button', 'btn-dismiss', 'Dismiss');
+  no.addEventListener('click', () => card.remove());
+  actions.appendChild(no);
+  card.appendChild(actions);
+
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function confirmAssertion(card) {
+  const sentence = card?.dataset.sentence || '';
+  if (!sentence) return;
+  card.textContent = '';
+  card.appendChild(el('strong', null, '✎ storing…'));
+  try {
+    const r = await fetch('/kb/assert/confirm', {
+      method: 'POST',
+      // No Authorization here: the page-level fetch shim (Package A) adds the
+      // bearer token to every call. Setting it again would be a second place
+      // for the token to go stale.
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sentence, confirmed: true}),
+    });
+    const data = await r.json();
+    card.textContent = '';
+    const ok = !data.error && data.stored > 0;
+    const head = el('strong', null,
+      ok ? `✓ stored ${data.stored} belief(s)` : '⚠ nothing stored');
+    head.style.color = ok ? 'var(--accent3)' : 'var(--warn)';
+    card.appendChild(head);
+    // I-6 — the endpoint declares what it did NOT store and why. Showing the
+    // success and swallowing the reason would be the same defect one layer up.
+    card.appendChild(el('div', 'triple',
+      data.error || data.hint || data.detection_reason || ''));
+    const no = el('button', 'btn-dismiss', 'Dismiss');
+    no.addEventListener('click', () => card.remove());
+    card.appendChild(no);
+  } catch (e) {
+    card.textContent = '';
+    card.appendChild(el('strong', null, '⚠ ' + e));
+  }
+}
+
+async function confirmSearch(card) {
+  const query = card?.dataset.query || '';
+  if (!query) return;
+
+  card.innerHTML = `
+    <strong style="color:var(--accent3)">⚡ SEARCHING…</strong><br>
+    <span>${query}</span>`;
+
+  try {
+    const r = await fetch('/search/execute', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query, confirmed: true}),
+    });
+    const data = await r.json();
+
+    if (data.refused) {
+      // W10b — refused by name (action_not_recorded: not sent, or its result
+      // withheld), in the server's words; never shown as "no results".
+      card.innerHTML = `
+        <strong style="color:var(--danger)">⚠ Web search refused: ${_esc(data.refused)}</strong><br>
+        <span>${_esc(data.detail || '')}</span>
+        <div class="proposal-actions">
+          <button class="btn-dismiss">Dismiss</button>
+        </div>`;
+      card.querySelector('.btn-dismiss').addEventListener('click',
+        () => card.remove());
+      return;
+    }
+    if (!r.ok || data.error || !data.results || data.results.length === 0) {
+      // A failure says what it was; "no results found" only for a search that ran.
+      card.innerHTML = `
+        <strong style="color:var(--warn)">⚠ ${r.ok ? 'No search results' : 'Search failed'}</strong><br>
+        <span>${_esc(data.error || (r.ok ? 'no results found' : 'HTTP ' + r.status))}</span>
+        <div class="proposal-actions">
+          <button class="btn-dismiss">Dismiss</button>
+        </div>`;
+      card.querySelector('.btn-dismiss').addEventListener('click',
+        () => card.remove());
+      return;
+    }
+
+    const resultBlock = data.results.slice(0, 5).map(r =>
+      `[${r.engine || 'web'}] ${r.title}\n${r.url}\n${(r.snippet || '').slice(0, 160)}`
+    ).join('\n\n');
+
+    card.innerHTML = `
+      <strong style="color:var(--accent3)">✓ ${data.count} results found</strong><br>
+      <span>${query}</span>`;
+
+    window._searchContext = {
+      query,
+      block: '[WEB SEARCH RESULTS]\n' + resultBlock,
+      count: data.count,
+    };
+
+    setTimeout(() => {
+      card.remove();
+      _sendWithSearchContext(query);
+    }, 600);
+
+  } catch (e) {
+    card.innerHTML = `
+      <strong style="color:var(--danger)">✗ Search failed</strong><br>
+      <span>${e.message || e}</span>
+      <div class="proposal-actions">
+        <button class="btn-dismiss">Dismiss</button>
+      </div>`;
+    card.querySelector('.btn-dismiss').addEventListener('click',
+      () => card.remove());
+  }
+}
+
+function _sendWithSearchContext(query) {
+  const inp = document.getElementById('msg-input');
+  const snd = document.getElementById('send');
+  if (!inp || !snd) {
+    showToast('Results ready — send your message to get an answer');
+    return;
+  }
+  inp.value = query;
+  inp.dispatchEvent(new Event('input', {bubbles: true}));
+  setTimeout(() => { snd.click(); }, 200);
+  return;
+}
+
+async function sendMessage() {
+  const text = input.value.trim(); if (!text) return;
+  // A wedged button must not be bypassable. `send.onclick` respects
+  // `disabled`; the Enter binding calls this directly and did not, so a turn
+  // that died mid-stream left the button disabled while Enter kept sending —
+  // the operator went on talking to a UI that had stopped finishing turns.
+  if (send.disabled) return;
+  input.value = '';
+  send.disabled = true;
+  appendMsg('user', text);
+  const body = appendMsg('assistant', '');
+
+  // Reset right-panel turn-scoped sections
+  $('#injected').innerHTML = '<div class="triple">…</div>';
+  $('#rag').innerHTML = '<div class="triple">…</div>';
+  $('#prediction').innerHTML = '<div class="triple">…</div>';
+  $('#compaction').innerHTML = '<div class="triple">idle</div>';
+
+  // Fix 9 — include any pending attachment, then clear it (single-use).
+  const reqBody = {message: text};
+  // v3.1 Phase 1b — attribution as body fields, sent on EVERY request the
+  // way scope is (nothing on the server remembers the unit between turns).
+  // `close` is single-use: armed by the button, sent once, cleared.
+  const unitEl = document.getElementById('unit-input');
+  const accEl = document.getElementById('accountable-input');
+  const closeBtn = document.getElementById('unit-close');
+  // W4 part 1 — in proxy mode the identity proxy supplies the login, so the
+  // console sends no `accountable` of its own (window.NEXUS_WHOAMI, by init).
+  const who = await window.NEXUS_WHOAMI;
+  const proxyMode = !!(who && who.auth_mode === 'proxy');
+  if (unitEl && unitEl.value.trim()) reqBody.work_unit = unitEl.value.trim();
+  if (!proxyMode && accEl && accEl.value.trim()) reqBody.accountable = accEl.value.trim();
+  if (closeBtn && closeBtn.classList.contains('armed')) {
+    reqBody.decision_boundary = 'close';
+    closeBtn.classList.remove('armed');
+  }
+  if (window._pendingAttachments && window._pendingAttachments.length) {
+    reqBody.attachments = window._pendingAttachments;
+    window._pendingAttachments = [];
+  }
+  // Fix SEARCH_UX — inject web-search results into the message body if
+  // confirmSearch staged them. Single-use: clear after consumption.
+  if (window._searchContext && window._searchContext.block) {
+    reqBody.message = text + '\n\n' + window._searchContext.block;
+    window._searchContext = null;
+  }
+  try {
+    const resp = await fetch('/chat', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(reqBody),
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        // ONE BAD FRAME MUST NOT COST THE TURN ITS REMAINING FRAMES.
+        // This call had no guard, so a throw exited both loops and rejected
+        // sendMessage — dropping every later frame including `done`, which is
+        // the only place the provenance expander is attached. Six handlers can
+        // throw on a payload the server can actually produce.
+        //
+        // DECLARED, NOT SWALLOWED (I-6). The frame is named in the log with
+        // its event, because a handler that throws is usually a payload
+        // contract breaking, and a silent catch would hide the contract break
+        // instead of fixing it. The six handlers are deliberately NOT
+        // individually guarded for the same reason.
+        try {
+          handleFrame(frame, body);
+        } catch (err) {
+          const ev = (frame.split('\n').find(l => l.startsWith('event: ')) || '')
+                       .slice(7) || '(unnamed)';
+          console.error('[nexus] SSE handler failed on "' + ev + '": ' +
+                        (err && err.message ? err.message : err) +
+                        ' — frame dropped, stream continues.', frame);
+        }
+      }
+    }
+    await Promise.all([loadSnapshot(), refreshKbStats(), refreshKairos(), refreshOverride(), refreshChainStatus()]);
+  } finally {
+    // The button is re-enabled whatever happened. A network drop or an abort
+    // used to leave it disabled for the life of the page, and with the guard
+    // above that would now be a hard lockout rather than a silent bypass.
+    send.disabled = false; input.focus();
+  }
+}
+
+function handleFrame(frame, body) {
+  const lines = frame.split('\n');
+  const ev = (lines.find(l => l.startsWith('event: ')) || '').slice(7);
+  const dataStr = (lines.find(l => l.startsWith('data: ')) || '').slice(6);
+  if (!ev) return;
+  let data; try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+
+  switch (ev) {
+    case 'token':
+      body.textContent += data.t || '';
+      log.scrollTop = log.scrollHeight;
+      break;
+    case 'turn_start':
+      $('#chat-head').textContent = `chat · turn ${data.turn}`;
+      break;
+    case 'model_swap_starting':
+      $('#model-badge').textContent = `${data.to.split(':')[0]} (${data.capability})`;
+      $('#active-model').innerHTML = `<div class="triple"><b>${data.to}</b><br><span class="muted">${data.capability}${data.fallback_used ? ' (fallback)' : ''}</span></div>`;
+      break;
+    case 'model_routed':
+      $('#model-badge').textContent = (data.model || '—').split(':')[0];
+      $('#active-model').innerHTML =
+        `<div class="triple"><b>${data.model}</b><br>` +
+        `<span class="muted">${data.capability}` +
+        `${data.override_active ? (data.locked ? ' · LOCKED' : ' · OVERRIDE') : ''}` +
+        `${data.fallback_used ? ' · fallback' : ''}</span></div>`;
+      break;
+    case 'triples_injected':
+      const inj = $('#injected'); inj.innerHTML = '';
+      data.forEach(t => {
+        const e = el('div', 'triple', `(${t.s} ${t.r} ${t.o}) [w=${fmt(t.w)} g=${t.g} t=${t.tier}]`);
+        inj.appendChild(e);
+      });
+      break;
+    case 'graph_activating':
+      data.forEach(n => pulseNode(n.id));
+      break;
+    case 'prediction_generated':
+      $('#prediction').innerHTML = `<div class="triple">predicted: ${data.expected_nodes.join(', ')}</div>`;
+      break;
+    case 'prediction_error':
+      $('#prediction').innerHTML += `<div class="triple">surprise=${fmt(data.magnitude, 3)} new=[${data.high_surprise.join(',')}] confirmed=[${data.confirmed.join(',')}] missed=[${data.missed.join(',')}]</div>`;
+      break;
+    case 'compaction_fired':
+      $('#compaction').innerHTML += `<div class="alert">tier ${data.tier}: -${data.tokens_freed} tok (${data.items_removed} items)</div>`;
+      break;
+    case 'compaction_report': {
+      // BD-3 — the report is PASS or WARN; the FAIL tier, its red latch and
+      // the `corrupted` state were retired (nothing could set them).
+      const badge = $('#integrity-badge');
+      const pf = data.pass_fail || '—';
+      badge.textContent = pf;
+      badge.className = pf === 'PASS' ? 'badge-pass' : 'badge-warn';
+      break;
+    }
+    case 'triples_extracted': {
+      const box = $('#extracted'); box.innerHTML = '';
+      data.forEach(t => {
+        box.appendChild(el('div', 'triple',
+          `(${t.subject} ${t.relation} ${t.object}) [c=${fmt(t.confidence, 2)}]`));
+      });
+      break;
+    }
+    case 'contradiction_found': {
+      const box = $('#contradictions');
+      if (box.querySelector('.triple')) box.innerHTML = '';
+      box.appendChild(el('div', 'contradiction',
+        `${data.subject} → ${data.object}: "${data.relation_a}" vs "${data.relation_b}"`));
+      break;
+    }
+    case 'curiosity_surfaced': {
+      const box = $('#curiosity-panel');
+      if (box.querySelector('.triple')) box.innerHTML = '';
+      const c = el('div', 'curio');
+      // P2/F-20 — the formula is stated, not mystified.
+      c.title = 'curiosity score = in_degree × (1 − evidential weight); four question templates';
+      c.appendChild(el('div', 'q', data.question));
+      c.appendChild(el('div', 'meta',
+        `${data.node_id} · ${data.epistemic_state} · score ${fmt(data.score, 2)}`));
+      box.appendChild(c);
+      break;
+    }
+    case 'chain_appended':
+      refreshChainStatus();
+      break;
+    case 'kb_pressure_alert':
+      // Fix 0 — web search proposal surfaces here. Other types
+      // (semantic_duplicates / cortex_drift / gap / staleness / dilution)
+      // can be wired in similar branches as they're built.
+      if (data && data.type === 'web_search' && data.action === 'not_recorded') {
+        renderSearchNotSent(data.detail);     // W10b: a refusal, never an offer
+      } else if (data && data.type === 'web_search') {
+        renderSearchProposal(data.query, data.reasons);
+      } else if (data && data.type === 'assertion') {
+        renderAssertionProposal(data);
+      } else if (data) {
+        showKBAlert(data);
+      }
+      break;
+    case 'hebbian_update':
+      // Subtle update — refresh graph at end-of-turn
+      break;
+    case 'eval_metric': {
+      // BB Part 1 — null means not computed (nothing injected: no
+      // denominator). fmt(null) would print 0.00, a score that was never
+      // measured, so an absent value is rendered as words.
+      const fmtm = v => (v === null || v === undefined) ? 'not computed' : fmt(v, 2);
+      $('#eval').innerHTML = `<div class="triple">composite ${fmtm(data.composite)}<br>relevancy ${fmtm(data.answer_relevancy)} · faithful ${fmtm(data.faithfulness)} · precision ${fmtm(data.context_precision)}</div>`;
+      break;
+    }
+    case 'record_failed': {
+      // W6 — the recorder fails closed: no record of this turn exists. Under
+      // the default release its answer was never sent; under `live` it is on
+      // screen above, and this line says that it has no record.
+      const note = document.createElement('div');
+      note.className = 'triple';
+      note.style.color = 'var(--danger)';
+      note.textContent = (data.answer_released
+        ? 'This answer has no record: the record could not be written'
+        : 'This answer was withheld: its record could not be written')
+        + ` (${data.reason}). The turn was not added to the conversation.`;
+      body.appendChild(note);
+      $('#chat-head').textContent = `chat · turn ${data.turn} not recorded`;
+      break;
+    }
+    case 'done':
+      $('#chat-head').textContent = `chat · turn ${data.turn} (${data.tokens} tokens)`;
+      // H.2 — `done` has always carried lineage_id and the handler always
+      // dropped it. It is the only link between an answer on screen and the
+      // record of what produced it.
+      attachProvenance(body, data.lineage_id);
+      // v3.1 Phase 1b — the unit badge reads `done`, never an event: which
+      // unit the turn was attributed to and what was declared about it.
+      {
+        const badge = $('#unit-badge');
+        if (badge) {
+          const parts = [data.work_unit_id || 'no unit'];
+          if (data.attribution_status === 'unattributed') parts.push('unattributed');
+          if (data.unit_first_seen) parts.push('new');
+          if (data.unit_closed) parts.push('closed');
+          if (data.unit_already_closed) parts.push('already closed');
+          if (data.unit_closed_at_time_of_turn) parts.push('closed before this turn');
+          if (data.boundary_not_applied) parts.push('close ignored: ' + data.boundary_not_applied);
+          if (Array.isArray(data.flags) && data.flags.length) parts.push(data.flags.join(', '));
+          badge.textContent = parts.join(' · ');
+        }
+      }
+      if (typeof updateSystemStats === 'function') updateSystemStats();
+      if (typeof renderKBList === 'function') renderKBList(_domainFilter);
+      break;
+  }
+}
+
+send.onclick = sendMessage;
+input.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+// v3.1 Phase 1b — arm/disarm the single-use close; it sends nothing itself.
+{
+  const closeBtn = document.getElementById('unit-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => closeBtn.classList.toggle('armed'));
+}
+
+// Fix 9 — attach button → file picker → base64 → pending list.
+window._pendingAttachments = window._pendingAttachments || [];
+const attachBtn = document.getElementById('attach-btn');
+const fileInput = document.getElementById('file-input');
+if (attachBtn && fileInput) {
+  attachBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const b64 = String(reader.result).split(',')[1] || '';
+      window._pendingAttachments.push({
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        data: b64,
+      });
+      showToast(`Attached: ${file.name}`);
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = '';   // allow same file twice
+  });
+}
+
+// ============== Initial load ==============
+// ══════════════════════════════════════════════════════════════════
+// NEXUS UI v3 — MOCK-MATCHED ENHANCEMENTS (additive)
+// ══════════════════════════════════════════════════════════════════
+
+// showToast already defined above (inline-style version) — guard is a no-op.
+if (typeof showToast === 'undefined') {
+  window.showToast = function(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  };
+}
+
+const kbSourceDefs = [
+  { name:'ConceptNet (EN)',   domain:'general', key:'general',  max:500000, source:'conceptnet' },
+  { name:'Wikidata / Coding', domain:'coding',  key:'coding',   max:200000, source:'wikidata'   },
+  { name:'Wikidata / Health', domain:'health',  key:'health',   max:200000, source:'wikidata'   },
+  { name:'WordNet (EN)',      domain:'general', key:'wordnet',  max:50000,  source:'wordnet'    },
+  { name:'Wikidata / Fitness',domain:'fitness', key:'fitness',  max:100000, source:'wikidata'   },
+];
+
+let _domainFilter = 'all';
+
+function filterDomain(btn, domain) {
+  document.querySelectorAll('.domain-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _domainFilter = domain;
+  renderKBList(_domainFilter);
+}
+
+function renderKBList(filter) {
+  filter = filter || 'all';
+  const list = document.getElementById('kb-list');
+  if (!list) return;
+
+  fetch('/kb/stats')
+    .then(r => r.json())
+    .then(stats => {
+      // AUDIT (Phase 1F.2): /kb/stats returns only { total, by_granularity }.
+      // There is NO per-source breakdown (no by_source / offline_fixture).
+      // So we cannot split counts per named source. Faithful fallback: attribute
+      // the untagged total to ConceptNet (EN) — current seed/fixture data is
+      // conceptnet-shaped — flagged as "fixture", and mark the rest "not loaded".
+      const total = Number(stats.total) || 0;
+
+      const sources = kbSourceDefs.map((k, i) => {
+        const isPrimary = i === 0;                 // ConceptNet (EN)
+        const count = isPrimary ? total : 0;
+        return {
+          ...k,
+          triples: count,
+          loaded:  count > 0,
+          via_fixture: isPrimary && total > 0,     // amber "fixture" attribution
+        };
+      });
+
+      const loadedCount = sources.filter(s => s.loaded).length;
+      const badge = document.getElementById('kb-status');
+      if (badge) {
+        const t = total >= 1000 ? (total / 1000).toFixed(1) + 'K' : total;
+        badge.textContent = `${loadedCount} source${loadedCount === 1 ? '' : 's'} · ${t} triples`;
+      }
+
+      const filtered = filter === 'all'
+        ? sources : sources.filter(k => k.domain === filter);
+
+      list.innerHTML = filtered.map(k => {
+        const displayCount = k.via_fixture
+          ? `${k.triples >= 1000 ? (k.triples / 1000).toFixed(1) + 'K' : k.triples} (fixture)`
+          : k.loaded
+            ? (k.triples >= 1000 ? (k.triples / 1000).toFixed(0) + 'K' : k.triples)
+            : 'not loaded';
+        const dotColor = k.via_fixture ? 'color:var(--warn)'
+                       : k.loaded      ? ''
+                       :                 'color:var(--text3)';
+        return `
+        <div class="kb-item">
+          <div class="kb-item-header">
+            <span class="kb-item-name" style="${dotColor}">
+              ${k.loaded ? '●' : '○'} ${k.name}
+            </span>
+            <span class="kb-item-count" style="${k.via_fixture ? 'color:var(--warn)' : ''}">
+              ${displayCount}
+            </span>
+          </div>
+          <div class="kb-bar">
+            <div class="kb-bar-fill"
+                 style="width:${Math.min(100, (k.triples / k.max) * 100).toFixed(0)}%;
+                        ${k.via_fixture ? 'background:var(--warn)' : !k.loaded ? 'background:var(--border2)' : ''}">
+            </div>
+          </div>
+          <div class="kb-meta">${k.source} · ${k.domain}</div>
+        </div>`;
+      }).join('');
+    })
+    .catch(() => {
+      const badge = document.getElementById('kb-status');
+      if (badge) badge.textContent = '0 sources';
+      list.innerHTML = kbSourceDefs
+        .filter(k=>filter==='all'||k.domain===filter)
+        .map(k=>`<div class="kb-item">
+          <div class="kb-item-header">
+            <span class="kb-item-name" style="color:var(--text3)">○ ${k.name}</span>
+            <span class="kb-item-count">not loaded</span>
+          </div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:0%"></div></div>
+          <div class="kb-meta">${k.source} · ${k.domain}</div>
+        </div>`).join('');
+    });
+}
+
+function renderMemory(items) {
+  const list = document.getElementById('memory-list');
+  if (!list) return;
+  if (!items || !items.length) {
+    list.innerHTML = '<div style="padding:10px 14px;font-size:9px;color:var(--text3)">empty</div>';
+    return;
+  }
+  list.innerHTML = items.map(m => {
+    const w = m.weight || m.confidence || m.c || 0.5;
+    return `<div class="mem-item">
+      <div class="mem-triple">
+        <span class="mem-subj">${m.subject||m.s||''}</span>
+        <span class="mem-rel"> —${m.relation||m.r||''}→ </span>
+        <span class="mem-obj">${m.object||m.o||''}</span>
+      </div>
+      <div class="mem-conf">
+        <div class="conf-bar"><div class="conf-fill" style="width:${(w*100).toFixed(0)}%"></div></div>
+        <span class="conf-val">${w.toFixed(2)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+if (typeof startSeed === 'undefined') {
+  window.startSeed = function() {
+    const source = document.getElementById('seed-source')?.value || 'wikidata';
+    const query  = document.getElementById('seed-query')?.value || '';
+    const limit  = parseInt(document.getElementById('seed-limit')?.value) || 5000;
+    const status = document.getElementById('seed-status-text');
+    const wrap   = document.getElementById('seed-progress-wrap');
+    const fill   = document.getElementById('seed-progress-fill');
+    if (!query) { showToast('Enter a concept or QID first'); return; }
+    if (status) { status.textContent = `Seeding ${source}...`; status.style.display = 'block'; }
+    if (wrap) wrap.style.display = 'block';
+    if (fill) fill.style.width = '15%';
+    const ep = source === 'wikidata' ? '/kb/seed/wikidata' : '/kb/seed/conceptnet';
+    fetch(ep, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({concepts:[query], confirmed:true, per_concept_limit:limit}),
+    })
+    .then(r=>r.json())
+    .then(d => {
+      if (fill) fill.style.width = '100%';
+      if (status) status.textContent = `✓ Seeded ${d.seeded||0} triples from ${d.source}`;
+      setTimeout(() => renderKBList(_domainFilter), 600);
+    })
+    .catch(e => { if (status) status.textContent = `✗ ${e.message}`; });
+  };
+}
+
+function updateSystemStats() {
+  fetch('/model/status')
+    .then(r=>r.json())
+    .then(s => {
+      const total    = s.vram?.total_gb || 12;
+      const model    = s.vram?.model_gb || s.vram?.used_gb || 0;
+      const embed    = s.vram?.embed_gb || 0.3;
+      const headroom = Math.max(0, total - model - embed);
+      const pct      = Math.min(100, Math.round(((model+embed)/total)*100));
+      const vf = document.getElementById('vram-fill');
+      if (vf) vf.style.width = pct + '%';
+      const set = (id, val, cls) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = val;
+        if (cls) el.className = 'stat-val ' + cls;
+      };
+      set('s-model',    model.toFixed(1)+' GB',    model>10?'warn':'ok');
+      set('s-embed',    embed.toFixed(1)+' GB',    'ok');
+      set('s-headroom', headroom.toFixed(1)+' GB', headroom<1?'warn':'ok');
+      if (s.tps) set('s-tps', s.tps.toFixed(1), 'ok');
+      set('s-ollama', '● online', 'ok');
+    })
+    .catch(() => { const el=document.getElementById('s-ollama'); if(el){el.textContent='● offline';el.className='stat-val danger';} });
+
+  // H.3b — three bugs in three lines, previously.
+  //  1. it polled /health, which 404'd (the canonical path is /healthz;
+  //     /health is now an alias, and this asks for the canonical one).
+  //  2. `fetch` RESOLVES on a 404 and nothing checked `r.ok`, so the light
+  //     read "online" whether the server was healthy, unhealthy, or serving
+  //     a route that did not exist. Falsely reassuring beats broken only in
+  //     a demo, and only until someone looks.
+  //  3. the body was never read, so `embedding_degraded` — shipped by P1/F-10
+  //     specifically to make degradation visible — reached no UI at all.
+  fetch('/healthz')
+    .then(async r => {
+      const el = document.getElementById('s-kb');
+      if (!el) return;
+      if (!r.ok) {
+        el.textContent = '● error ' + r.status; el.className = 'stat-val danger';
+        return;
+      }
+      const h = await r.json();
+      if (h.embedding_degraded) {
+        // Degraded is NOT healthy and must not be painted as such: the
+        // substrate is answering with deterministic hash pseudo-embeddings,
+        // so retrieval quality is not what it appears.
+        el.textContent = '● degraded';
+        el.className = 'stat-val warn';
+        el.title = 'embeddings degraded: ' + (h.embedding_degraded_reason || 'unknown');
+      } else {
+        el.textContent = '● online';
+        el.className = 'stat-val ok';
+        el.title = (h.kb_triples ?? 0) + ' triples';
+      }
+    })
+    .catch(() => { const el=document.getElementById('s-kb'); if(el){el.textContent='● offline';el.className='stat-val danger';} });
+}
+
+function renderCtxTriples(triples, containerId, countBadgeEl) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (countBadgeEl) countBadgeEl.textContent = triples.length;
+  el.innerHTML = triples.map(t=>`
+    <div class="ctx-triple">
+      <span class="mem-subj">${t.subject||''}</span>
+      <span class="mem-rel"> → ${t.relation||''} → </span>
+      <span class="mem-obj">${t.object||''}</span>
+    </div>`).join('');
+}
+
+function showKBAlert(payload) {
+  if (payload.type === 'web_search') return;
+  showToast(`KB: ${payload.type} — ${payload.action||''}`);
+}
+
+async function init() {
+  resize();
+  await Promise.all([loadSnapshot(), refreshKbStats(), refreshKairos(), refreshOverride(), refreshChainStatus()]);
+  // Active model badge
+  const r = await fetch('/state/summary');
+  if (r.ok) {
+    const s = await r.json();
+    $('#model-badge').textContent = s.active_model.split(':')[0];
+    $('#active-model').innerHTML = `<div class="triple"><b>${s.active_model}</b></div>`;
+  }
+  // Poll KAIROS once a minute (the daemon polls every 5; this just refreshes UI)
+  setInterval(refreshKairos, 60_000);
+  // UI v3 — populate the live KB source list + system stats, then poll.
+  if (typeof renderKBList === 'function') renderKBList('all');
+  if (typeof updateSystemStats === 'function') updateSystemStats();
+  setInterval(() => { if (typeof renderKBList === 'function') renderKBList(_domainFilter || 'all'); }, 30000);
+  setInterval(() => { if (typeof updateSystemStats === 'function') updateSystemStats(); }, 15000);
+}
+
+// W4 part 1 — who this console runs as, asked once on load (GET /whoami,
+// gated like the evidence reads). In proxy mode the server injects no token:
+// the identity proxy in front supplies the login with every request, the
+// status bar says "running as <login>", and the accountable box is hidden
+// (sendMessage then sends no `accountable` of its own). In token mode, or if
+// the answer is not ok, nothing visible changes and the chat body is as it was.
+window.NEXUS_WHOAMI = fetch('/whoami')
+  .then(r => (r.ok ? r.json() : null))
+  .catch(() => null)
+  .then(w => {
+    if (w && w.auth_mode === 'proxy') {
+      const bar = document.createElement('div');
+      bar.className = 'statusbar';
+      bar.id = 'statusbar';
+      const item = document.createElement('span');
+      item.className = 's-item s-accent';
+      item.id = 'running-as';
+      item.textContent = 'running as ' + (w.login || '');
+      bar.appendChild(item);
+      document.body.appendChild(bar);
+      document.body.classList.add('has-statusbar');
+      const acc = document.getElementById('accountable-input');
+      if (acc) { acc.value = ''; acc.style.display = 'none'; }
+    }
+    return w;
+  });
+init();
+
+// ── PANEL RESIZE ───────────────────────────────────────────────
+// Pass 2 — additive: existing JS above is untouched. Drag handles
+// adjust the inline `width` of #left / #right (which #shell holds as
+// flex children). Persisted in localStorage; double-click resets.
+(function() {
+  const MIN_PX = 180;   // minimum panel width in pixels
+  const MAX_PCT = 0.6;  // maximum panel width as fraction of window
+
+  // sign convention: dragging right (clientX↑) GROWS the left panel
+  // (sign=+1) but SHRINKS the right panel (sign=-1). The spec's
+  // formula `newW = startW + delta` is applied with the sign-flipped
+  // delta so both handles feel natural.
+  function initResize(handleId, getPanelEl, sign) {
+    const handle = document.getElementById(handleId);
+    if (!handle) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startW = 0;
+
+    handle.addEventListener('mousedown', e => {
+      dragging = true;
+      startX = e.clientX;
+      const panel = getPanelEl();
+      startW = panel ? panel.getBoundingClientRect().width : 300;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const panel = getPanelEl();
+      if (!panel) return;
+      const delta = (e.clientX - startX) * sign;
+      const newW = Math.max(MIN_PX, Math.min(window.innerWidth * MAX_PCT, startW + delta));
+      panel.style.width = newW + 'px';
+      panel.style.flexShrink = '0';
+      panel.style.flexGrow = '0';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Persist widths
+      const panel = getPanelEl();
+      if (panel) {
+        try {
+          localStorage.setItem('nexus_' + handleId + '_width', panel.style.width);
+        } catch(e) {}
+      }
+    });
+
+    // Restore persisted width on load
+    try {
+      const saved = localStorage.getItem('nexus_' + handleId + '_width');
+      if (saved) {
+        const panel = getPanelEl();
+        if (panel) {
+          panel.style.width = saved;
+          panel.style.flexShrink = '0';
+          panel.style.flexGrow = '0';
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Wire up handles — selectors match the actual panel IDs in this file.
+  initResize('handle-left',  () => document.getElementById('left'),  +1);
+  initResize('handle-right', () => document.getElementById('right'), -1);
+
+  // Double-click handle to reset to default width
+  ['handle-left', 'handle-right'].forEach(id => {
+    const h = document.getElementById(id);
+    if (h) h.addEventListener('dblclick', () => {
+      const panel = id === 'handle-left'
+        ? document.getElementById('left')
+        : document.getElementById('right');
+      if (panel) {
+        panel.style.width = '';
+        panel.style.flexShrink = '';
+        panel.style.flexGrow = '';
+        try { localStorage.removeItem('nexus_' + id + '_width'); } catch(e) {}
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

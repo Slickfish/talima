@@ -1,0 +1,45 @@
+{
+  "block": {
+    "block_hash": "f1967686064e54b279a361edc471079e5028bb6ff120f93b735a8552e9e10731",
+    "header": {
+      "fingerprint_hash": "7e1c9bce79757d80dcdf63c8f102694ffb18ad63022abeadbf267511de63eeea",
+      "index": 0,
+      "kind": "governance",
+      "layout": 2,
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "roots": {
+        "action": {
+          "root": "947a510b7df85075c047d17ffec0c0347ffe17bddaf163404d7d0076ea6f1854",
+          "size": 1
+        },
+        "commit": {
+          "root": "7f8748f9f2f396a8a8a9eb573e6f546be2a8abd27df6b595c172a00a88a0705e",
+          "size": 1
+        },
+        "lineage": {
+          "root": "2a43615c12d772284ba7a4954eb612b430055ed2515208daabfbdf9693a2e4ed",
+          "size": 3
+        }
+      },
+      "snapshot_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "snapshot_missing": true,
+      "snapshot_path": "",
+      "timestamp": 1700000000.0001
+    },
+    "index": 0,
+    "layout": 2
+  },
+  "commitment_root": "1ab8f18da1485f49924489a9a2e7dd1147a6a12862033adb2c73bb52ada1b4f3",
+  "leaf": "3238e3971473158ff6a87cf9738d49bfa321a4cbe2f79d08032ed9439241b47d1ab8f18da1485f49924489a9a2e7dd1147a6a12862033adb2c73bb52ada1b4f3",
+  "leaf_index": 1,
+  "lineage_id": "56ea7d0a-1664-499d-857d-4dd578571c2a",
+  "path": [
+    "89e9400e528c25308d77753becad3e0cd2de572c10e9f81e86b7b9151ac85de8",
+    "99c95f41e5c77804cde6a3981d698c9bade475660a5c61db8b116ab31c74eb92"
+  ],
+  "proof_version": 1,
+  "record_hash": "3238e3971473158ff6a87cf9738d49bfa321a4cbe2f79d08032ed9439241b47d",
+  "seal": "lineage",
+  "state": "sealed",
+  "tree_size": 3
+}

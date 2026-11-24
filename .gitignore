@@ -1,0 +1,70 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+data/*.db
+# W1 — SQLite's sidecars beside each store: the rollback journal exists during
+# every write transaction, WAL and SHM if a store is ever switched to WAL.
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/snapshots/*
+data/chroma/*
+# W1 (part 5f) — a data root inside data/ (`start.py --data-root data/<name>`):
+# every file the product writes under it, at any depth. The rules above were
+# one level deep. These sit before the two negations, which must stay after
+# every rule that matches a .gitkeep so the tracked ones survive.
+data/**/*.db
+data/**/*.db-journal
+data/**/*.db-wal
+data/**/*.db-shm
+data/**/*.jsonl
+data/**/snapshots/*
+data/**/chroma/*
+# W2 — the single-writer lock beside each store, and its takeover log
+# (backend/store_lock.py): kb.db.lock and kb.db.lock.log, at any depth.
+data/*.db.lock
+data/*.db.lock.log
+data/**/*.db.lock
+data/**/*.db.lock.log
+# W9 — the instance's private signing key beside kb.db, and the scratch file it is made through: never
+# in git, at any depth (the verifier's MF5).
+data/instance_key.json
+data/**/instance_key.json
+data/.instance_key.json.*
+data/**/.instance_key.json.*
+!data/snapshots/.gitkeep
+!data/chroma/.gitkeep
+.env
+data/*.jsonl
+# W2 — the bundle build's work folder and its output (scripts/build_bundle.py).
+/build/
+/dist/
+
+# --- Operator working files (added 1 Oct 2026) ---
+data/*.pre-*
+.env.bak-*
+reports/*.json
+# W4 part 4 (run/specs/W4.md D22): the simulated UAT's report at its default
+# path, one per platform (scripts/uat_simulate.py); CI keeps it as an artifact.
+# tests/test_w4_uat_simulate.py's D22 holds it ignored.
+reports/uat_simulation_*.md
+reports/reference_gateway*.md
+.aq-cache/
+.venv-aq/
+aq_*.json
+citation_*.json
+citation_*.jsonl
+consolidation_sample.json
+epistemic_derivation.json
+framework.json
+history_shapes.json
+pairing_exclusion.json
+pregate_rows.json
+retention_cost.json
+term_identity.json
+Open questions_backlog/
+chat thread *.txt
+searxng_settings.yml
+docs/*.pdf

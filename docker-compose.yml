@@ -1,0 +1,469 @@
+# NEXUS — compose (W3 part 3, run/specs/W3.md D4 and D6; RUN_WORKLIST W3).
+#
+# Profiles, each with NEXUS services of its own, so the profile IS the
+# backend (a shared service whose LLM_BACKEND came from the operator's .env
+# could start the Ollama container beside a stub, silently):
+#
+#   stub     docker compose --profile stub up -d       no model server; CI's smoke and a first look
+#   ollama   docker compose --profile ollama up -d     the ollama/ollama image, GPU through the NVIDIA toolkit
+#   api      docker compose --profile api up -d        NEXUS_API_BACKEND=openai (default) or anthropic, the key from the environment
+#   search   docker compose --profile <one> --profile search up -d     adds SearXNG for /search/confirm
+#   hosted   docker compose --profile hosted up -d     one NEXUS per tester, each in a pod of its own behind the operator's
+#                                                      identity proxy, on the `postgres` service, the stub provider (W4 part 3)
+#   backup   docker compose --profile backup run --rm backup           one backup folder (part 4); under hosted one per
+#                                                      tester, backup-t1 and so on (deploy/nexus-backup.sh, the timer's command)
+#
+# Values the compose file reads from the project's .env (NEXUS's own .env,
+# which .env.example describes) or the environment, beyond NEXUS's settings:
+# NEXUS_IMAGE and NEXUS_TAG (the image; ghcr.io/slickfish/talima:latest),
+# NEXUS_DOMAIN (Caddy's host name; localhost), NEXUS_HTTP_PORT and
+# NEXUS_HTTPS_PORT (80 and 443), NEXUS_API_BACKEND (the api profile's
+# backend, openai or anthropic; openai), NEXUS_OLLAMA_MODELS (the tags Ollama pulls
+# on first start), NEXUS_BACKUP_DIR (./backups; the backup service writes
+# it as the image's user, uid 10001, so the directory must be writable by
+# that uid: cloud-init creates it so; under hosted, a folder per tester
+# beside it) and NEXUS_BACKUP_KEEP (14). Under the `hosted` profile (W3b
+# part 5; W4 parts 0 and 3): NEXUS_POSTGRES_PASSWORD (the superuser's, the
+# image's own `postgres`, used at initialisation only: no NEXUS service and
+# no backup service receives it), NEXUS_TESTERS (the tester keys
+# deploy/postgres-init.sh makes a role and a database for; t1 t2 t3),
+# NEXUS_T1_PASSWORD, NEXUS_T2_PASSWORD and NEXUS_T3_PASSWORD (each tester's
+# role `nexus_t<n>`, which that tester's NEXUS connects as),
+# NEXUS_BACKUP_PASSWORD (the read-only backup role's; each tester's backup
+# service builds its URL from it, on that tester's database),
+# NEXUS_T1_OWNER, NEXUS_T2_OWNER and NEXUS_T3_OWNER (the login each tester's
+# NEXUS answers for; unset, it answers for no one), NEXUS_IDENTITY_HEADER
+# (the header the identity proxy puts the login in; Tailscale-User-Login),
+# and NEXUS_FRONT_SUBNET, NEXUS_FRONT_POOL and NEXUS_IDENTITY_PROXY_IP (the
+# `front` network, below). The passwords go into URLs: URL-safe characters
+# only (`openssl rand -hex 24`).
+#
+# The network policy is the network's, not the application's (RUN_CHARTER
+# law 17): every NEXUS service sits ONLY on `internal`, a network with no
+# default route and no gateway address (`internal: true`,
+# `gateway_mode_ipv4: isolated`: W3's establish measured that without the
+# second a host service on 0.0.0.0 is reachable at the gateway), or under
+# `hosted` in a pod whose two networks, `internal` and `front`, are both
+# such networks. From inside it a connect to a public address fails at once
+# with ENETUNREACH; the model server, SearXNG, Caddy and the database are
+# reached by name. Caddy is dual-homed and the one published port of the
+# three console profiles; the console is served through it over HTTPS. Ollama is
+# dual-homed too, for its first-start pull of the model (declared: the model
+# container has egress). SearXNG, when enabled, is dual-homed for the search
+# engines it queries. Under the `api` profile the NEXUS service itself is
+# dual-homed on `egress`, because its model server is on the internet: the
+# one profile where the NEXUS container has a route out, declared here and
+# in docs/DEPLOY.md; an egress proxy with an allowlist is the alternative D4
+# names as a register line.
+#
+# Every NEXUS service: learning frozen (RUN_CHARTER law 12; the image's
+# environment), the data root on a named volume, /tmp a tmpfs (chromadb
+# needs a writable /tmp), every capability dropped (W4 part 3: the image
+# runs as uid 10001 and needs none, and a raw socket is how a container
+# would forge a peer address on a bridge), the token from the operator's
+# .env (NEXUS_API_TOKEN; unset, the server generates one per process and
+# prints it once, which `docker compose logs` shows; under hosted none: a
+# token is no credential in proxy mode).
+
+name: nexus
+
+x-nexus: &nexus
+  image: ${NEXUS_IMAGE:-ghcr.io/slickfish/talima}:${NEXUS_TAG:-latest}
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  tmpfs:
+    - /tmp
+  volumes:
+    - nexus_data:/var/lib/nexus
+  environment: &nexus_env
+    NEXUS_HOST: 0.0.0.0
+    NEXUS_PORT: "8000"
+    NEXUS_DATA_ROOT: /var/lib/nexus
+    NEXUS_LEARNING: ${NEXUS_LEARNING:-frozen}
+    NEXUS_LEARNING_FROZEN_SINCE: ${NEXUS_LEARNING_FROZEN_SINCE:-}
+    NEXUS_API_TOKEN: ${NEXUS_API_TOKEN:-}
+    SEARXNG_URL: http://searxng:8080
+  healthcheck:
+    test: ["CMD", "python", "-c", "import sys, urllib.request; r = urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4); sys.exit(0 if r.status == 200 else 1)"]
+    interval: 30s
+    timeout: 5s
+    start_period: 90s
+    retries: 3
+
+# W4 part 3 (run/specs/W4.md D15 as refined before part 3): a tester's NEXUS,
+# its environment, and the pod's relay. The services are written out below,
+# three testers; docs/DEPLOY.md gives the pattern for more.
+x-tester: &tester
+  <<: *nexus
+  profiles: [hosted]
+
+x-tester-env: &tester_env
+  <<: *nexus_env
+  NEXUS_HOST: 127.0.0.1
+  NEXUS_API_TOKEN: ""
+  LLM_BACKEND: stub
+  NEXUS_AUTH_MODE: proxy
+  NEXUS_IDENTITY_HEADER: ${NEXUS_IDENTITY_HEADER:-Tailscale-User-Login}
+  NEXUS_STORE: postgres
+
+x-relay: &relay
+  # Pinned as the generic caddy is (the release current when W3 wrote it).
+  image: caddy:2.11.9
+  profiles: [hosted]
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  tmpfs:
+    - /data
+    - /config
+  environment:
+    NEXUS_IDENTITY_PROXY_IP: ${NEXUS_IDENTITY_PROXY_IP:-172.31.240.250}
+  volumes:
+    - ./deploy/Caddyfile.relay:/etc/caddy/Caddyfile:ro
+  networks: [internal, front]
+
+services:
+  nexus-stub:
+    <<: *nexus
+    profiles: [stub]
+    environment:
+      <<: *nexus_env
+      LLM_BACKEND: stub
+    networks:
+      internal:
+        aliases: [nexus]
+
+  nexus-ollama:
+    <<: *nexus
+    profiles: [ollama]
+    environment:
+      <<: *nexus_env
+      LLM_BACKEND: ollama
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_started
+    networks:
+      internal:
+        aliases: [nexus]
+
+  nexus-api:
+    <<: *nexus
+    profiles: [api]
+    environment:
+      <<: *nexus_env
+      # The api profile's backend is its own variable, never the operator's
+      # LLM_BACKEND: compose interpolates from the project's .env, which is
+      # NEXUS's, where .env.example says `LLM_BACKEND=ollama` (the console's
+      # default); read here, that would start an Ollama-backend NEXUS with no
+      # Ollama under the profile named api (the W3 verifier's F6).
+      LLM_BACKEND: ${NEXUS_API_BACKEND:-openai}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_EXTRACTION_MODEL: ${OPENAI_EXTRACTION_MODEL:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      ANTHROPIC_EXTRACTION_MODEL: ${ANTHROPIC_EXTRACTION_MODEL:-}
+      NEXUS_EMBED_URL: ${NEXUS_EMBED_URL:-}
+      NEXUS_EMBED_MODEL: ${NEXUS_EMBED_MODEL:-}
+      NEXUS_EMBED_API_KEY: ${NEXUS_EMBED_API_KEY:-}
+    networks:
+      internal:
+        aliases: [nexus]
+      egress: {}
+
+  # The hosted profile (W3b part 5; W4 part 3, run/specs/W4.md D15 as refined,
+  # D16 to D19): one NEXUS per tester, each in a pod of its own, behind an
+  # identity proxy the operator runs on `front` (deploy/tailscale.md,
+  # deploy/cloudflare-access.md; the deploy smoke's stand-in is
+  # deploy/compose.identity-sim.yml, an override no host runs). This file
+  # sets the identity header nowhere. Per tester tN, three written out:
+  #   hosted-tN  the pod: a Caddy relay that owns the network namespace, on
+  #              `internal` (the database) and `front` (the identity proxy),
+  #              both without a route out. It answers 403 to any immediate
+  #              peer but the identity proxy's one address, and forwards the
+  #              rest, headers as they arrive and unbuffered, to 127.0.0.1:8000
+  #              (deploy/Caddyfile.relay). Its admin endpoint is off: any
+  #              process in the pod could reach it.
+  #   nexus-tN   tester N's NEXUS, joined to the pod's namespace and nothing
+  #              else, bound to 127.0.0.1:8000 so that only its own relay
+  #              reaches it, in proxy mode (NEXUS_AUTH_MODE=proxy, W4 part 1):
+  #              it answers only a loopback peer that carries the identity
+  #              header once, and only for its owner (NEXUS_TN_OWNER; unset,
+  #              every request is refused with 403 "owner not set"). Its own
+  #              data volume, and tester N's role and database (W4 part 0).
+  #              It lives in the namespace its pod had when it started.
+  #              Measured: a pod restarted in place (`docker restart`, or its
+  #              restart policy after a crash) leaves it with no interface but
+  #              lo, the relay answering 502 and the NEXUS still reporting
+  #              healthy; `docker compose up -d` then changes nothing, and
+  #              `docker compose restart nexus-tN` joins it to the pod again.
+  #              A pod recreated alone (`up -d --force-recreate hosted-tN`)
+  #              has it recreated into it by the next `docker compose up -d`.
+  #              Meanwhile the tester is refused, never exposed.
+  #   backup-tN  tester N's backup (profile backup), further down.
+  # The single `nexus-hosted` of W3b and W4 part 0 is retired: a token-mode
+  # NEXUS on Postgres is `start.py --serve` with NEXUS_STORE and
+  # NEXUS_DATABASE_URL (W3b's U and V series test it).
+  hosted-t1:
+    <<: *relay
+
+  nexus-t1:
+    <<: *tester
+    network_mode: "service:hosted-t1"
+    volumes:
+      - nexus_t1_data:/var/lib/nexus
+    environment:
+      <<: *tester_env
+      NEXUS_OWNER_IDENTITY: ${NEXUS_T1_OWNER:-}
+      NEXUS_DATABASE_URL: postgresql://nexus_t1:${NEXUS_T1_PASSWORD:-}@postgres:5432/nexus_t1
+    depends_on:
+      hosted-t1:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  hosted-t2:
+    <<: *relay
+
+  nexus-t2:
+    <<: *tester
+    network_mode: "service:hosted-t2"
+    volumes:
+      - nexus_t2_data:/var/lib/nexus
+    environment:
+      <<: *tester_env
+      NEXUS_OWNER_IDENTITY: ${NEXUS_T2_OWNER:-}
+      NEXUS_DATABASE_URL: postgresql://nexus_t2:${NEXUS_T2_PASSWORD:-}@postgres:5432/nexus_t2
+    depends_on:
+      hosted-t2:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  hosted-t3:
+    <<: *relay
+
+  nexus-t3:
+    <<: *tester
+    network_mode: "service:hosted-t3"
+    volumes:
+      - nexus_t3_data:/var/lib/nexus
+    environment:
+      <<: *tester_env
+      NEXUS_OWNER_IDENTITY: ${NEXUS_T3_OWNER:-}
+      NEXUS_DATABASE_URL: postgresql://nexus_t3:${NEXUS_T3_PASSWORD:-}@postgres:5432/nexus_t3
+    depends_on:
+      hosted-t3:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  # The database: on the internal network only (no route out, nothing
+  # published), its data on a named volume, TCP keepalives so a vanished
+  # client's session (and the single-writer lock it holds) ends in about a
+  # minute and a half. The image is pinned to the release current when this
+  # was written (10 November 2026); its major is the image's client's
+  # (postgresql-client-16; tests/test_w3b_backup.py K6). The superuser is the
+  # image's own `postgres`, used at initialisation only (W4 part 0,
+  # run/specs/W4.md D14). deploy/postgres-init.sh runs once, when the volume
+  # is first initialised, and makes for each key in NEXUS_TESTERS a role
+  # `nexus_<key>` that is no superuser and the database `nexus_<key>` it owns
+  # (CONNECT for that role and the backup role only), and the read-only
+  # backup role. It reads only this service's environment, so each tester
+  # key's password variable is listed here. An initialised volume keeps the
+  # roles it has. Every tester's NEXUS holds about eight sessions here
+  # (scripts/verify_deploy.py counts them under hosted); the server's
+  # max_connections, the image's default, bounds the number of testers.
+  postgres:
+    image: postgres:16.15
+    profiles: [hosted]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${NEXUS_POSTGRES_PASSWORD:-}
+      NEXUS_BACKUP_PASSWORD: ${NEXUS_BACKUP_PASSWORD:-}
+      NEXUS_TESTERS: ${NEXUS_TESTERS:-t1 t2 t3}
+      NEXUS_T1_PASSWORD: ${NEXUS_T1_PASSWORD:-}
+      NEXUS_T2_PASSWORD: ${NEXUS_T2_PASSWORD:-}
+      NEXUS_T3_PASSWORD: ${NEXUS_T3_PASSWORD:-}
+    command: ["postgres", "-c", "tcp_keepalives_idle=60", "-c", "tcp_keepalives_interval=10",
+              "-c", "tcp_keepalives_count=3"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sh:/docker-entrypoint-initdb.d/10-nexus-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    networks: [internal]
+
+  ollama:
+    # Pinned to the release current when this file was written (8 November
+    # 2026); C-38 reads the daemon's own reasoning separation from v0.12.4 on.
+    image: ollama/ollama:0.40.15
+    profiles: [ollama]
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      # The measured model, pulled on first start (the entrypoint below);
+      # pinned here, not in the application (model names live in model_map).
+      NEXUS_OLLAMA_MODELS: ${NEXUS_OLLAMA_MODELS:-deepseek-r1:14b-qwen-distill-q4_K_M phi4-mini:3.8b-q4_K_M nomic-embed-text}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        pid=$$!
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        for m in $$NEXUS_OLLAMA_MODELS; do ollama list | grep -q "^$$m" || ollama pull "$$m"; done
+        wait $$pid
+    networks: [internal, egress]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  searxng:
+    # SearXNG publishes a tag per day; this one is the release current when
+    # this file was written (8 November 2026).
+    image: searxng/searxng:2026.11.8-74418092d
+    profiles: [search]
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    networks: [internal, egress]
+
+  # The console's Caddy, under the three profiles whose console it serves
+  # (W4 part 3, D17): under hosted its one upstream, the alias `nexus`, is
+  # no tester's, and each tester's pod has a relay of its own.
+  caddy:
+    image: caddy:2.11.9
+    profiles: [stub, ollama, api]
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_HTTP_PORT:-80}:80"
+      - "${NEXUS_HTTPS_PORT:-443}:443"
+    environment:
+      NEXUS_DOMAIN: ${NEXUS_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal, egress]
+
+  # The backup (W3 part 4, D5): scripts/backup.py on the data volume, which
+  # it mounts READ-ONLY, writing one folder per run under the backup
+  # directory on the host (NEXUS_BACKUP_DIR, ./backups by default). Run by the
+  # daily timer (deploy/cloud-init.yaml, through deploy/nexus-backup.sh) and
+  # by hand:
+  #   docker compose --profile backup run --rm backup
+  # The restore verification runs through the same service with its own
+  # entrypoint, on the newest folder the backup wrote:
+  #   docker compose --profile backup run --rm --entrypoint python backup scripts/restore_verify.py --latest-under /var/backups/nexus
+  # On the internal network only: no route out, and under hosted the
+  # database by name. One backup holds one store, so the hosted profile's
+  # stores are backed up per tester (W4 part 3, D18): backup-tN, tester N's
+  # data volume read-only, a host folder of its own (NEXUS_BACKUP_DIR/tN, so
+  # retention prunes within a tester and --latest-under reads one tester's
+  # backups), and the read-only backup role's URL on tester N's database,
+  # built here from NEXUS_BACKUP_PASSWORD and handed over in the environment,
+  # never on a command line. The dump is the image's pg_dump; the restore
+  # verification takes the same URL and restores into scratch databases it
+  # drops:
+  #   docker compose --profile backup run --rm backup-t1
+  #   docker compose --profile backup run --rm --entrypoint python backup-t1 scripts/restore_verify.py --latest-under /var/backups/nexus
+  # The one backup role reads every tester's store: it is the operator's.
+  backup: &backup
+    image: ${NEXUS_IMAGE:-ghcr.io/slickfish/talima}:${NEXUS_TAG:-latest}
+    profiles: [backup]
+    read_only: true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp
+    volumes:
+      - nexus_data:/var/lib/nexus:ro
+      - ${NEXUS_BACKUP_DIR:-./backups}:/var/backups/nexus
+    environment: &backup_env
+      NEXUS_DATA_ROOT: /var/lib/nexus
+      NEXUS_BACKUP_DIR: /var/backups/nexus
+      NEXUS_BACKUP_KEEP: ${NEXUS_BACKUP_KEEP:-14}
+    entrypoint: ["sh", "scripts/backup.sh"]
+    command: []
+    networks: [internal]
+
+  backup-t1:
+    <<: *backup
+    volumes:
+      - nexus_t1_data:/var/lib/nexus:ro
+      - ${NEXUS_BACKUP_DIR:-./backups}/t1:/var/backups/nexus
+    environment:
+      <<: *backup_env
+      NEXUS_BACKUP_DATABASE_URL: postgresql://nexus_backup:${NEXUS_BACKUP_PASSWORD:-}@postgres:5432/nexus_t1
+
+  backup-t2:
+    <<: *backup
+    volumes:
+      - nexus_t2_data:/var/lib/nexus:ro
+      - ${NEXUS_BACKUP_DIR:-./backups}/t2:/var/backups/nexus
+    environment:
+      <<: *backup_env
+      NEXUS_BACKUP_DATABASE_URL: postgresql://nexus_backup:${NEXUS_BACKUP_PASSWORD:-}@postgres:5432/nexus_t2
+
+  backup-t3:
+    <<: *backup
+    volumes:
+      - nexus_t3_data:/var/lib/nexus:ro
+      - ${NEXUS_BACKUP_DIR:-./backups}/t3:/var/backups/nexus
+    environment:
+      <<: *backup_env
+      NEXUS_BACKUP_DATABASE_URL: postgresql://nexus_backup:${NEXUS_BACKUP_PASSWORD:-}@postgres:5432/nexus_t3
+
+networks:
+  internal:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  # W4 part 3 (D15 as refined): `front` holds the testers' pods and the
+  # identity proxy, and nothing else. Internal and its gateway isolated, as
+  # `internal` is. Its subnet is fixed so that the identity proxy can sit at
+  # one fixed address, NEXUS_IDENTITY_PROXY_IP, outside the pool Docker hands
+  # dynamic addresses from (NEXUS_FRONT_POOL): a container created while the
+  # identity proxy is down can never be handed its address. The relays trust
+  # that one address and not the subnet, because every pod is on front too.
+  # The identity proxy is the one service on front with a route out. The
+  # defaults (172.31.240.0/24, the pool 172.31.240.0/25, the proxy at
+  # 172.31.240.250) lie near the end of the range Docker's default pools take
+  # /16 networks from in order, 172.17.0.0/16 first; a host whose own networks
+  # use them sets the three variables together.
+  front:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: ${NEXUS_FRONT_SUBNET:-172.31.240.0/24}
+          ip_range: ${NEXUS_FRONT_POOL:-172.31.240.0/25}
+  egress: {}
+
+volumes:
+  nexus_data: {}
+  nexus_t1_data: {}
+  nexus_t2_data: {}
+  nexus_t3_data: {}
+  postgres_data: {}
+  ollama_models: {}
+  caddy_data: {}
+  caddy_config: {}

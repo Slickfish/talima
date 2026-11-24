@@ -1,0 +1,22 @@
+{
+ "captured_at_commit": "d66e743 (a scratch commit whose backend/ and scripts/ are 36ffb17's, main's 590b4f7), 2026-11-16, before any gateway code",
+ "fixture": "scripts/history_shape_harness._build_store fixture store plus one wikidata row (interval training, subclass_of, physical exercise, 0.7, tier 2); harness _Stub provider with no plant; three turns through POST /chat with the bearer on a TestClient (no lifespan); token mode, production's defaults; turn 2's consent set and backend.tools.search.fetch_json replaced by three fixed results",
+ "clock": "tests/fixtures/ce_rig.RigClock (one microsecond per read) installed as time.time around the seeding and every request",
+ "capture": "the same function the pin runs (gateway_pin_turns), run on the base under PYTHONHASHSEED 0, 1 and 12345: the nine hashes agreed turn for turn",
+ "questions": [
+  "what does interval training improve?",
+  "what is the latest on interval training?",
+  "and what does it reduce?"
+ ],
+ "search_turn": 2,
+ "request_hashes": [
+  "fb82caa9bc2fc663fa08bb6bf7599b024a8924b86723ce1361d5dae7f20ed670",
+  "c2107237000e9fe01e7d98b52065b266403832c627c74b7a6deaec5d1221c13c",
+  "581021d72e174f6751192915e679225db06f8831a7f7cb3fa5d58e78dad0bb85"
+ ],
+ "context_hashes": [
+  "0adffe210ea843753c50fcdeb1a7fec9397f24a9cf709bd95490d4dfb0d24814",
+  "ff3bb918dcd7fa08386278f22515ebcacf495616da3c1e88bdc3389b406202b3",
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ ]
+}

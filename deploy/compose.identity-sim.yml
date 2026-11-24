@@ -1,0 +1,57 @@
+# NEXUS — a stand-in for the identity proxy, for the deploy smoke and
+# nothing else (W4 part 3, run/specs/W4.md D16). NEVER run it on a host that
+# serves testers: anyone who can reach its ports on the host's loopback is
+# taken for the tester whose port it is.
+#
+#   docker compose -f docker-compose.yml -f deploy/compose.identity-sim.yml --profile hosted up -d
+#
+# (or COMPOSE_FILE=docker-compose.yml:deploy/compose.identity-sim.yml, as the
+# smoke sets it). An override file that only adds this one service:
+# docker-compose.yml sets the identity header nowhere, and a real deployment
+# puts the operator's identity proxy at the same address instead
+# (deploy/tailscale.md, deploy/cloudflare-access.md).
+#
+# `identity-sim` sits where the identity proxy sits: on `front` at the one
+# fixed address every tester's relay trusts (NEXUS_IDENTITY_PROXY_IP), and on
+# `egress`, through which its ports are published, on 127.0.0.1 only
+# (deploy/Caddyfile.identity-sim has the routes):
+#
+#   18101, 18102, 18103  tester 1, 2 and 3: the identity header set to that
+#                        tester's login, a client's own copy replaced, to
+#                        that tester's relay
+#   18111                the mismatch: tester 2's login, to tester 1's relay
+#   18112                no identity: the header removed, to tester 1's relay
+#
+# scripts/verify_deploy.py --identity-sim reads these ports (SIM_TESTER_PORTS,
+# SIM_MISMATCH, SIM_NO_IDENTITY; tests/test_w4_hosted.py holds the two
+# equal). The logins are the testers' owners, NEXUS_T1_OWNER to
+# NEXUS_T3_OWNER, which compose refuses to start the stand-in without.
+# Paths are the project directory's (the main file's), as compose reads an
+# override's.
+
+services:
+  identity-sim:
+    image: caddy:2.11.9
+    profiles: [hosted]
+    read_only: true
+    cap_drop: [ALL]
+    tmpfs:
+      - /data
+      - /config
+    environment:
+      NEXUS_IDENTITY_HEADER: ${NEXUS_IDENTITY_HEADER:-Tailscale-User-Login}
+      NEXUS_T1_OWNER: ${NEXUS_T1_OWNER:?the stand-in presents tester 1's login, so set NEXUS_T1_OWNER}
+      NEXUS_T2_OWNER: ${NEXUS_T2_OWNER:?the stand-in presents tester 2's login, so set NEXUS_T2_OWNER}
+      NEXUS_T3_OWNER: ${NEXUS_T3_OWNER:?the stand-in presents tester 3's login, so set NEXUS_T3_OWNER}
+    volumes:
+      - ./deploy/Caddyfile.identity-sim:/etc/caddy/Caddyfile:ro
+    ports:
+      - "127.0.0.1:18101:18101"
+      - "127.0.0.1:18102:18102"
+      - "127.0.0.1:18103:18103"
+      - "127.0.0.1:18111:18111"
+      - "127.0.0.1:18112:18112"
+    networks:
+      front:
+        ipv4_address: ${NEXUS_IDENTITY_PROXY_IP:-172.31.240.250}
+      egress: {}

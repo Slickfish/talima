@@ -1,0 +1,246 @@
+# The deploy smoke (RUN_WORKLIST.md W3; run/specs/W3.md D7): the image built
+# from the tree, a compose profile up on an ubuntu-24.04 runner (the
+# cloud-init target's own release; ubuntu-latest is migrating to 26.04), and
+# scripts/verify_deploy.py's checks against it. Two profiles, one job each:
+# `stub` (the SQLite store; eight checks through Caddy, the egress proof
+# inside the NEXUS container among them) and `hosted` (W3b part 5; W4 parts 0
+# and 3, run/specs/W4.md D15 to D19): three testers, each NEXUS in a pod of its
+# own on the `postgres` service as that tester's role, behind the stand-in
+# for the identity proxy (deploy/compose.identity-sim.yml, laid over the
+# compose file for this job alone), and the verifier's --identity-sim checks
+# per tester: whoami, a turn and its record's login, three distinct
+# identities and no record of one tester in another's store, the mismatch
+# and the missing identity refused, the relay refusing another tester's
+# process, egress refused inside each pod, each tester's backup and restore,
+# each tester's role and another tester's database refused, and the sessions
+# each process holds, measured.
+#
+# Staged like bundle.yml (RUN_CHARTER.md §7, amendment 2): on a push that
+# changes what the deployment is made of (deploy/, the compose file, the
+# backup, restore and verify scripts, backend/, start.py, requirements.txt,
+# this file); always on a head commit marked [ci full] and on manual
+# dispatch. The plan job decides from the push's own diff and says why.
+#
+# A push to claude/run-docs (the documentation session's branch), or one
+# that changes only documents (run/specs/**, any *.md file at the repository
+# root, docs/** and LICENSE), starts no run of this workflow at all, not even
+# the plan job: `branches-ignore` and `paths-ignore` on the push trigger, the
+# same as ci.yml and bundle.yml (the operator's instructions of 11 and 16
+# November). GitHub decides that from the branch and the files the push
+# changed and cannot read a commit message, so a commit marked [ci full] that
+# changes nothing but documents smokes nothing, a closing commit and a merge
+# of claude/run-docs included. If such a push needs the smoke, dispatch this
+# workflow by hand: a dispatch has no path filter.
+#
+# No GPU on a runner: the ollama profile is validated (docker compose config)
+# and never run here. No script checks a real model through the stack yet
+# (BACKLOG W3b-E1): the operator's check is one turn through the console.
+#
+# Bounded, so that a hang fails by name (the operator's instruction of
+# 15 November; tests/test_w3_ci.py C14). The smoke takes about three minutes
+# (run 25: the build 63 to 86 s, up 13 to 37 s, the verifier 2 to 19 s).
+# Every step of both jobs has a `timeout-minutes` of its own. Measured on
+# GitHub by a probe (ci run 86 on run/wip/W4b-timeout-probe, 15 November):
+# when a step's own bound fires, the log says "The action '<the step's name>'
+# has timed out after N minutes", that step and the job conclude `failure`,
+# and the steps under `if: failure()` and `if: always()` still run, so the
+# logs are printed and the stack is taken down. When only a job's bound
+# fires, the log says "The operation was canceled", the job concludes
+# `cancelled`, no step is named, and a step under `if: failure()` is
+# skipped. So each job's own `timeout-minutes` is the backstop: for what no
+# step's bound covers (the runner's set-up and post steps), and for a run
+# whose steps together pass the job's 30 minutes while each stays inside its
+# own bound (the smoke's step bounds add up to 59). The logs step runs on a
+# cancellation too: a second probe (ci run 87) showed a step under
+# `if: failure() || cancelled()` running when only the job's bound fired.
+
+name: deploy-smoke
+
+# Amendment 7 (17 November): started by hand only. The push and pull-request
+# triggers are gone (tests/test_w3_ci.py C18); the staging below still reads
+# the mark and the push's diff, and a dispatch runs everything.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-smoke-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+        with:
+          fetch-depth: 0
+      - id: plan
+        timeout-minutes: 2
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          python3 - <<'EOF'
+          import os, subprocess
+          event, before, message = os.environ["EVENT"], os.environ.get("BEFORE", ""), os.environ.get("MESSAGE", "")
+          watched = ("deploy/", "docker-compose.yml", "scripts/backup.", "scripts/restore_verify.py",
+                     "scripts/verify_deploy.py", "backend/", "start.py", "requirements.txt",
+                     ".github/workflows/deploy-smoke.yml")
+          if event == "workflow_dispatch" or "[ci full]" in message:
+              run, why = "true", f"{event}; [ci full]: {'[ci full]' in message}"
+          else:
+              if not before or set(before) == {"0"}:
+                  changed, how = None, "a new branch: no previous head to compare"
+              else:
+                  proc = subprocess.run(["git", "diff", "--name-only", before, "HEAD"], capture_output=True, text=True)
+                  changed = proc.stdout.split() if proc.returncode == 0 else None
+                  how = f"{len(changed)} files changed since {before[:7]}" if changed is not None else f"{before[:7]} is not in the history"
+              hit = changed is None or any(p.startswith(watched) for p in changed)
+              run, why = ("true" if hit else "false"), how + ("; the deployment's files are among them" if changed and hit else "")
+          print(f"deploy-smoke plan: run={run} ({why})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"run={run}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(f"### deploy-smoke plan\n\nrun={run}: {why}\n")
+          EOF
+
+  smoke:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: deploy smoke (ubuntu-24.04, ${{ matrix.profile }} profile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [stub, hosted]
+    env:
+      PROFILE: ${{ matrix.profile }}
+      NEXUS_IMAGE: nexus
+      NEXUS_TAG: ci
+      NEXUS_API_TOKEN: deploy-smoke-token
+      NEXUS_HTTP_PORT: "18080"
+      NEXUS_HTTPS_PORT: "18443"
+      NEXUS_BACKUP_DIR: ${{ github.workspace }}/backups
+      # The testers' logins (W4 part 3): what each tester's NEXUS answers
+      # for and the stand-in presents. Not secrets: the stand-in hands them
+      # to whoever reaches its loopback ports, which is the simulation.
+      NEXUS_T1_OWNER: t1@smoke.example
+      NEXUS_T2_OWNER: t2@smoke.example
+      NEXUS_T3_OWNER: t3@smoke.example
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Tools on the runner
+        timeout-minutes: 2
+        run: |
+          docker version --format 'docker {{.Server.Version}}'
+          docker compose version
+          python3 --version
+
+      - name: Validate the compose file under every profile (client-side)
+        timeout-minutes: 3
+        run: |
+          for p in stub ollama api search hosted backup; do
+            docker compose -f docker-compose.yml --profile "$p" config --quiet && echo "profile $p: config ok"
+          done
+          docker compose -f docker-compose.yml -f deploy/compose.identity-sim.yml --profile hosted config --quiet \
+            && echo "hosted with the stand-in for the identity proxy: config ok"
+
+      - name: Build the image from this tree
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          docker build -f deploy/Dockerfile -t "$NEXUS_IMAGE:$NEXUS_TAG" . 2>&1 | tail -n 20
+
+      - name: The hosted profile's passwords (fresh per run, masked) and the stand-in
+        if: matrix.profile == 'hosted'
+        timeout-minutes: 2
+        run: |
+          # The superuser's (the database's first start only), each tester's
+          # (the role nexus_t<n>, which that tester's NEXUS connects as) and
+          # the backup role's (each tester's backup service builds its URL).
+          # COMPOSE_FILE lays the stand-in for the identity proxy over the
+          # compose file for every docker compose call of this job.
+          superuser=$(openssl rand -hex 24)
+          tester1=$(openssl rand -hex 24)
+          tester2=$(openssl rand -hex 24)
+          tester3=$(openssl rand -hex 24)
+          backup=$(openssl rand -hex 24)
+          echo "::add-mask::$superuser"
+          echo "::add-mask::$tester1"
+          echo "::add-mask::$tester2"
+          echo "::add-mask::$tester3"
+          echo "::add-mask::$backup"
+          {
+            echo "NEXUS_POSTGRES_PASSWORD=$superuser"
+            echo "NEXUS_T1_PASSWORD=$tester1"
+            echo "NEXUS_T2_PASSWORD=$tester2"
+            echo "NEXUS_T3_PASSWORD=$tester3"
+            echo "NEXUS_BACKUP_PASSWORD=$backup"
+            echo "COMPOSE_FILE=docker-compose.yml:deploy/compose.identity-sim.yml"
+          } >> "$GITHUB_ENV"
+
+      - name: Up and wait for every NEXUS service's health
+        timeout-minutes: 10
+        run: |
+          # The backups directory as cloud-init makes it, the image's user's,
+          # mode 0750, and a folder in it per hosted tester (W4 part 3). The
+          # runner is not root (the `runner` user), so sudo.
+          sudo install -d -o 10001 -g 10001 -m 0750 "$NEXUS_BACKUP_DIR" "$NEXUS_BACKUP_DIR/t1" "$NEXUS_BACKUP_DIR/t2" "$NEXUS_BACKUP_DIR/t3"
+          docker compose --profile "$PROFILE" up -d
+          # The NEXUS services the profile runs, asked of compose: one under
+          # stub, one per tester under hosted.
+          services=$(docker compose --profile "$PROFILE" config --services | grep '^nexus-')
+          for _ in $(seq 1 90); do
+            waiting=
+            for s in $services; do
+              [ "$(docker inspect -f '{{.State.Health.Status}}' "nexus-$s-1" 2>/dev/null || true)" = "healthy" ] || waiting="$waiting $s"
+            done
+            [ -z "$waiting" ] && break
+            sleep 2
+          done
+          docker compose --profile "$PROFILE" ps
+          [ -z "$waiting" ] || { echo "not healthy:$waiting"; docker compose --profile "$PROFILE" logs; exit 1; }
+
+      - name: verify_deploy.py (eight checks under stub; per tester, through the stand-in, under hosted)
+        # 12, not 10: the verifier's own longest timeout for one call is 600 s, and it names the command that hung.
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          extra=()
+          if [ "$PROFILE" = "hosted" ]; then extra=(--identity-sim); fi
+          python3 scripts/verify_deploy.py --profile "$PROFILE" --insecure "${extra[@]}" 2>&1 | tee "$RUNNER_TEMP/verify.txt"
+
+      - name: Summary
+        if: always()
+        timeout-minutes: 2
+        run: |
+          {
+            echo "### deploy smoke (ubuntu-24.04, $PROFILE profile)"
+            echo
+            echo '```'
+            grep -E "^(PASS|FAIL|SKIP|MEASURED|verify_deploy|UNREACHABLE|REFUSED)" "$RUNNER_TEMP/verify.txt" 2>/dev/null || echo "no verifier output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Logs on failure
+        if: failure() || cancelled()
+        timeout-minutes: 3
+        run: docker compose --profile "$PROFILE" logs --tail 100 || true
+
+      - name: Down
+        if: always()
+        timeout-minutes: 5
+        run: docker compose --profile "$PROFILE" down -v --remove-orphans || true

@@ -1,0 +1,31 @@
+# NEXUS — Caddy, the one published service (W3 part 3, run/specs/W3.md D4).
+#
+# Caddy is dual-homed: `egress` for its certificates and the published ports
+# 80 and 443, `internal` to reach the console by its alias `nexus`. The NEXUS
+# container itself publishes nothing and has no route out, except under the
+# `api` profile, whose model server is on the internet (declared in
+# docker-compose.yml and docs/DEPLOY.md).
+#
+# NEXUS_DOMAIN names the host Caddy serves and obtains a certificate for
+# (Let's Encrypt, automatic). Unset, it is `localhost`: Caddy then issues a
+# certificate from its own internal CA, which a browser warns about and
+# `verify_deploy.py --insecure` accepts unverified (the smoke's loopback run;
+# against a real domain the verifier checks the certificate as a browser
+# would, and --insecure is not for it).
+#
+# The console's own token (NEXUS_API_TOKEN) still guards every state-changing
+# route and every evidence read behind this proxy: Caddy adds transport, not
+# authentication (THREAT_MODEL.md).
+
+{$NEXUS_DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy nexus:8000 {
+		# The SSE stream (/chat) is long-lived and must not be buffered.
+		flush_interval -1
+		header_up X-Forwarded-Proto {scheme}
+	}
+	log {
+		output stdout
+		format console
+	}
+}

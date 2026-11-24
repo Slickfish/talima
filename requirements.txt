@@ -1,0 +1,55 @@
+# Phase 1 + 2 dependencies. Later phases extend this file.
+fastapi>=0.110.0
+# MCP-2 — NEXUS as an MCP server (backend/mcp). The 2.x SDK: `MCPServer`,
+# stdio and streamable-http transports; FastMCP was renamed in 2.0.
+mcp>=2.3,<3
+uvicorn[standard]>=0.27.0
+httpx>=0.27.0
+pydantic>=2.5.0
+
+# Phase 2 — KB + LlamaIndex + adaptive granularity
+llama-index-core>=0.10.0
+SPARQLWrapper>=2.0.0
+
+# Phase 3 — Cortex + Hebbian
+networkx>=3.2
+
+# Phase 5 — KAIROS + LangGraph + procedural
+langgraph>=0.2.0
+
+# Phase 6 — DeepEval + model kernel (deepeval is optional; ragas.py works without it)
+# deepeval>=0.21.0
+
+# Phase 7 — Predictive cortex + Matryoshka 2-stage RAG
+chromadb>=0.4.22
+numpy>=1.26.0
+
+# W2 — the MCP bundle's build tool (scripts/build_bundle.py), pinned: the
+# build is reproducible only within one environment, and these two decide
+# the binary (run/specs/W2.md D2; RULINGS_TAKEN_BY_THE_RUN.md, Ruling 4).
+# Licence: GPL 2.0 with an exception for what it builds, and Apache 2.0
+# for a few files. A bundle it builds may ship under any licence its
+# dependencies allow (PyInstaller's own licence page).
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+
+# W3b — the Postgres driver behind the store interface (backend/store/),
+# pinned: the dialect (backend/store/dialect.py) is measured against one
+# driver's typing and rendering (run/specs/W3b.md S1 item 7). The binary
+# wheel bundles its own libpq (18.6 at this pin), OpenSSL and the Kerberos
+# and LDAP client libraries, so no host library is needed on any CI
+# platform. Licence: LGPL-3.0-only (both psycopg and psycopg-binary). The
+# desktop bundle excludes it at analysis and refuses a build that froze it
+# (scripts/build_bundle.py, D13): the bundle is SQLite only.
+psycopg[binary]==3.3.8
+# W9 — the instance's Ed25519 signing key (backend/memory/instance_key.py),
+# pinned: what the instance signs, scripts/nexus_verify.py checks with its own
+# RFC 8032 code, and the suite holds the two to the RFC's vectors at this pin
+# (run/specs/W9.md D2). Before W9 it arrived only through other packages'
+# extras. Licence: Apache-2.0 or BSD-3-Clause.
+cryptography==50.0.2
+
+# test
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+python-dotenv        # .env loading — backend/server.py imports it at module load
