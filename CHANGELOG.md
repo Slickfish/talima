@@ -22,6 +22,16 @@
   after the repository it runs in (`ghcr.io/<owner>/<repository>`, in lower case) and writes no name of its own,
   so a fork's release pushes the fork's image. A deployment that pulled the earlier default sets `NEXUS_IMAGE`
   to the image it wants.
+- **The front page and the marks.** The README opens with Talima: one sentence, the mark, badges, a quick start of
+  three commands that verifies the specification's test vectors offline, and how Talima compares with ordinary
+  logs, SCITT receipts and agent audit-trail drafts; NEXUS's page follows unchanged. Three marks in fixed colours
+  (clay, ink and paper) join `docs/brand/`, for pages that show an SVG as an image and give it no colour of its own.
+- **The release's tag is checked before anything is built.** `release.yml`'s dispatched tag is trimmed of ASCII
+  white space, and a tag that is not `v1.2.3` or `v1.2.3-` and lower-case letters and digits, or that the
+  repository does not hold, is refused by its first job; every other job waits for that one, takes the tag from it
+  and checks the tag out by its full name; the two that publish take from it whether the tag is a dry run, and no
+  image is pushed and no release is created unless it said the tag is not one; the release is created only for
+  that tag.
 - **The interceptor.** A standalone recorder an agent harness is pointed at as its model endpoint
   (`python -m backend.intercept`, the binary `talima-intercept`): every exchange passes through on its way to the
   provider and is recorded, the request before it is sent and the response when it is complete, and sealed into a

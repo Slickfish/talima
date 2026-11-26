@@ -10,11 +10,14 @@ C2  deploy-smoke.yml: every job pinned to ubuntu-24.04 (the cloud-init
     tears down with `if: always()`, and is staged: a plan job over the
     push's diff, always on [ci full] and dispatch.
 C3  release.yml: dispatched with a required tag, the release's own (since
-    Amendment 7 a tag push starts nothing, C18); the registry login,
-    the push and the release creation are each gated on the dry-run flag,
-    which derives from the tag's `-dryrun` suffix, so a dry-run tag builds
-    everything and publishes nothing; the image name is lowercased for
-    GHCR; only first-party actions.
+    Amendment 7 a tag push starts nothing, C18), read by the tag job's
+    check (since Amendment 11: trimmed and checked before any build,
+    tests/test_release_tag.py); the registry login, the push and the
+    release creation each run only when the dry-run flag is 'false' (an
+    empty flag publishes nothing), which the tag job derives from the
+    trimmed tag's `-dryrun` suffix, so a dry-run tag builds everything and
+    publishes nothing; the image name is lowercased for GHCR; only
+    first-party actions.
 C4  deploy.yml: dispatch only; the three secrets read into job-level env
     (secrets are not allowed in `if:`), every step that reaches the host
     gated on them, one no-op step that runs when they are unset and says
@@ -263,8 +266,12 @@ def release_problems(wf: dict) -> list[str]:
     tag = inputs.get("tag") or {}
     if tag.get("required") is not True or tag.get("type") != "string":
         problems.append(f"the release is not dispatched with a required tag: inputs={inputs}")
-    if "inputs.tag" not in str((wf.get("env") or {}).get("RELEASE_TAG", "")):
-        problems.append("the release's tag is not the dispatch's input")
+    tag_job = (wf.get("jobs") or {}).get("tag") or {}
+    check = next((s for s in steps(tag_job) if s.get("id") == "tag"), {})
+    if (check.get("env") or {}).get("TAG_INPUT") != "${{ inputs.tag }}":
+        problems.append("the release's tag is not the dispatch's input, read by the tag job's check")
+    if 'if [[ "$tag" == *-dryrun ]]; then dryrun=true; else dryrun=false; fi' not in step_text(check).splitlines():
+        problems.append("the tag job does not derive the dry-run flag from the trimmed tag's -dryrun suffix")
     perms = wf.get("permissions") or {}
     if perms.get("packages") != "write" or perms.get("contents") != "write":
         problems.append(f"permissions are {perms}, not packages and contents write")
@@ -273,10 +280,13 @@ def release_problems(wf: dict) -> list[str]:
         for step in steps(job):
             text = step_text(step)
             if any(w in text for w in PUBLISH_WORDS):
-                if str(step.get("if", "")).replace(" ", "") != "env.DRYRUN!='true'":
-                    problems.append(f"{name}: the step {step.get('name')!r} publishes without the dry-run gate")
-                if "-dryrun" not in dryrun_env:
-                    problems.append(f"{name}: DRYRUN does not derive from the tag's -dryrun suffix: {dryrun_env!r}")
+                if str(step.get("if", "")).replace(" ", "") != "env.DRYRUN=='false'":
+                    problems.append(f"{name}: the step {step.get('name')!r} publishes without the dry-run gate "
+                                    "(it must publish only when the flag is 'false', so an empty flag publishes "
+                                    "nothing)")
+                if dryrun_env != "${{ needs.tag.outputs.dryrun }}":
+                    problems.append(f"{name}: DRYRUN is not the tag job's flag, which derives from the tag's -dryrun "
+                                    f"suffix: {dryrun_env!r}")
             for word in ("uses",):
                 uses = str(step.get(word) or "")
                 if uses and not uses.startswith(FIRST_PARTY):
@@ -1298,6 +1308,21 @@ def test_c6_planted_ungated_steps_and_an_unpinned_runner_are_named():
     planted = yaml.safe_load(yaml.safe_dump(release))
     planted["jobs"]["image"]["steps"].append({"name": "planted action", "uses": "someone/else@v1"})
     assert any("third-party action someone/else@v1" in p for p in release_problems(planted))
+    # Amendment 11: the tag the check reads, the flag it derives, and the flag a publishing job takes
+    planted = yaml.safe_load(yaml.safe_dump(release))
+    planted["jobs"]["tag"]["steps"][1]["env"]["TAG_INPUT"] = "${{ github.ref_name }}"
+    assert "the release's tag is not the dispatch's input, read by the tag job's check" in release_problems(planted)
+    planted = yaml.safe_load(yaml.safe_dump(release))
+    planted["jobs"]["tag"]["steps"][1]["run"] = planted["jobs"]["tag"]["steps"][1]["run"].replace(
+        "*-dryrun ]]; then dryrun=true", "*-dry ]]; then dryrun=true")
+    assert "the tag job does not derive the dry-run flag from the trimmed tag's -dryrun suffix" in \
+        release_problems(planted)
+    planted = yaml.safe_load(yaml.safe_dump(release))
+    planted["jobs"]["image"]["steps"][4]["if"] = "env.DRYRUN != 'true'"          # fails open on an empty flag
+    assert any("'Push' publishes without the dry-run gate" in p for p in release_problems(planted))
+    planted = yaml.safe_load(yaml.safe_dump(release))
+    planted["jobs"]["release"]["env"]["DRYRUN"] = "${{ endsWith(inputs.tag, '-dryrun') }}"
+    assert any(p.startswith("release: DRYRUN is not the tag job's flag") for p in release_problems(planted))
 
     deploy = workflow("deploy.yml")
     assert deploy_problems(deploy) == []

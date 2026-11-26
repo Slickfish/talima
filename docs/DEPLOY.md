@@ -502,7 +502,15 @@ dispatch runs a workflow's full coverage.
 - `release.yml`: dispatched with an existing `v*` tag, the image to GHCR
   and the bundles and the `nexus-verify` binaries (Linux, Windows, macOS;
   W9's standalone verifier, each run once before upload) as release assets;
-  a `*-dryrun` tag builds everything and publishes nothing.
+  a `*-dryrun` tag builds everything, pushes no image and creates no
+  release (the builds' artifacts stay with the run). Its first job
+  checks the tag before anything is built: the input is trimmed of ASCII
+  white space, and a tag that is not `v1.2.3` or `v1.2.3-` and lower-case
+  letters and digits, or that the repository does not hold, is refused by
+  name. Every other job checks out `refs/tags/<tag>`; no image is pushed
+  and no release is created unless that first job said the tag is not a
+  dry run, and the release is created only for that tag (`--verify-tag`).
+  The builds' artifacts are uploaded to the workflow run on a dry run too.
 - `deploy.yml`: manual dispatch; pull and restart on the one host, then
   `verify_deploy.py` from the runner: the console checks over HTTPS, the
   backup, its restore and the egress proof through `docker compose` on the

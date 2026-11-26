@@ -27,3 +27,8 @@ tests/fixtures/W5_injection_set.json text eol=lf
 # rule.)
 tests/fixtures/tb_golden/** -text
 tests/fixtures/w11d/** -text
+
+# Amendment 11: the marks are published with their sha256 (docs/brand/README.md). No checkout may rewrite them:
+# they are kept exactly as committed. (The test that reads the hashes reads each mark as git's index holds it, so
+# a checkout's line ends do not change what it reads, and a mark committed with CRLF is named.)
+docs/brand/*.svg -text

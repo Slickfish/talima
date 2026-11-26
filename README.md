@@ -1,3 +1,35 @@
+# Talima: receipts for AI
+
+Prove what your AI was shown, and what it said.
+
+<p align="center"><img src="docs/brand/talima-mark-clay.svg" width="96" alt="Talima"></p>
+
+[![Licence](https://img.shields.io/github/license/Slickfish/talima)](https://github.com/Slickfish/talima/blob/main/LICENSE) [![Latest release](https://img.shields.io/github/v/release/Slickfish/talima)](https://github.com/Slickfish/talima/releases/latest) [![Specification: Talima v1](https://img.shields.io/badge/spec-v1-C2410C)](docs/TALIMA_SPEC.md)
+
+## Quick start: verify the test vectors
+
+```sh
+git clone https://github.com/Slickfish/talima.git
+python3 talima/scripts/talima_verify.py talima/tests/fixtures/tb_golden/credential.json --identity talima/tests/fixtures/tb_golden/identity.json
+python3 talima/scripts/talima_verify.py --chain talima/tests/fixtures/w11d/chain.json --identity talima/tests/fixtures/tb_golden/identity.json
+```
+
+The second and third commands each end with `talima-verify: VERIFIED`: a credential, and a chain of sealed blocks,
+from the specification's test vectors (`docs/TALIMA_SPEC.md`, section 14), each checked offline against the identity
+it is pinned to. The verifier needs Python 3.11 or later and nothing else installed; on Windows, write `py -3` for
+`python3`.
+
+## How it compares
+
+| | What it records |
+|---|---|
+| Ordinary logs | Lines an application chooses to write, usually unsealed: nothing in them shows later that a line is as it was first written, or that what the model was given is all there. |
+| SCITT receipts | That an issuer's signed statement was registered in a transparency service's append-only log: proof of inclusion, for whatever the statement says ([RFC 9943](https://www.rfc-editor.org/rfc/rfc9943)). |
+| Agent audit-trail drafts | Proposed, not standard: [draft-sharif-agent-audit-trail](https://datatracker.ietf.org/doc/draft-sharif-agent-audit-trail/), an individual Internet-Draft, hash-chains records of an agent's actions: who acted, what it did and with what outcome, with hashes of its input and output. |
+| Talima | What a model was shown and what it said, as hashes written when it answered, then sealed into a signed hash chain, with a credential anyone can check offline (`talima-verify`). |
+
+---
+
 Talima is the open record and verification standard: a sealed record of what an AI model was shown and said,
 and a credential anyone can check offline. NEXUS is its reference engine, and this page is about NEXUS
 (`docs/TALIMA.md` describes the standard and `docs/TALIMA_SPEC.md` specifies it).

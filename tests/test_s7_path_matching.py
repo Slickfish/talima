@@ -161,6 +161,8 @@ CLASSIFIED: dict[tuple[str, str], str] = {
     ("tests/test_w4_identity.py", "text/event-stream"): CONTENT_TYPE,                      # W4 part 1 — /chat's stream through the gate
     ("tests/test_w11d_conformance.py", "tests/fixtures/tb_golden/** -text"): TEXT,         # W11d — a line of .gitattributes (git's own pattern, posix on every platform), searched in the file's text
     ("tests/test_w11d_conformance.py", "tests/fixtures/w11d/** -text"): TEXT,              # W11d — the same, for the chain vector's folder
+    ("tests/test_readme_front.py", "tests/fixtures/tb_golden/proof.json"): POSIX_BY_CONTRACT,  # Amendment 11 — a tracked path, in a set of `.as_posix()` keys
+    ("tests/test_brand_marks.py", "docs/brand/*.svg -text"): TEXT,                         # Amendment 11 — a line of .gitattributes (git's own pattern, posix on every platform), searched in the file's lines
 }
 FILESYSTEM_SHAPED = {SOURCE_LITERAL, POSIX_BY_CONTRACT}
 

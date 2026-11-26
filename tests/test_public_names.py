@@ -32,13 +32,13 @@ WHAT IS HELD HERE
         image job and that one step: no step's commands hold the words `gh release` or one of the eight tools
         and four registry hosts of OF_AN_IMAGE; every job's commands are run by bash and no step has a shell of
         its own; every action a step uses is one of four, at whatever version; no job calls a workflow kept
-        elsewhere; the workflow's own environment holds one name, RELEASE_TAG.
+        elsewhere; the workflow has no environment of its own (the tag job reads the tag: test_release_tag.py).
         On a system with a shell the naming step's own text is run as the file has it, by bash with the options
         a runner gives `shell: bash` (the text handed over with `-c` where a runner writes a file), with the one
         expression Actions fills in filled in: for the public repository it gives IMAGE; and a step whose first
         command fails stops there.
     P4  Companions. An image default left elsewhere, in each of the four files in turn; the label and the
-        contact at another address. Fifty-three altered workflows, each named by the reading or the list ALONE
+        contact at another address. Fifty-four altered workflows, each named by the reading or the list ALONE
         (the text's hash names every altered file, so it is left out of that check): where the reading is the
         check the plant is something it does not name, and for each part of the list (a tool, a host in either
         case, `gh release`, a word broken across a continued line) one plant holds a word of the list, because a
@@ -93,7 +93,7 @@ CONTACT = re.compile(r"\((https?://[^;)]+); ")
 
 # --- the release workflow: its text, and what was read off it ---------------------------------------------------
 WORKFLOW = ".github/workflows/release.yml"
-WORKFLOW_SHA256 = "7779a8a3ea9b455796c7fe50c87b888e54ad9cb25a961663d732f95981e602c7"
+WORKFLOW_SHA256 = "ad302f53809d5172883efb73352080b8c298c68c5a22ea59c2794a3c2167c58f"
 FROM_THE_REPOSITORY = "${{ github.repository }}"
 LOWERED = "tr '[:upper:]' '[:lower:]'"
 READS = 'image=$(echo "ghcr.io/' + FROM_THE_REPOSITORY + '" | ' + LOWERED + ")"
@@ -102,15 +102,17 @@ NAMES_IT = (READS + "\n"
             'echo "dryrun=$DRYRUN tag=$RELEASE_TAG image=$image"\n')
 NAMED = '"${{ steps.name.outputs.image }}'
 TAGS = [NAMED + ':$RELEASE_TAG"', NAMED + ':latest"']
-PUBLISHING, DRY = "env.DRYRUN != 'true'", "env.DRYRUN == 'true'"
-DRYRUN = "${{ endsWith(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-dryrun') }}"
+PUBLISHING, DRY = "env.DRYRUN == 'false'", "env.DRYRUN == 'true'"
+# Since Amendment 11 the tag job checks the tag before any build, and every job reads the tag and the flag from it
+FROM_THE_TAG_JOB = {"RELEASE_TAG": "${{ needs.tag.outputs.tag }}", "DRYRUN": "${{ needs.tag.outputs.dryrun }}"}
 BASH = {"run": {"shell": "bash"}}
 # The image job whole, as YAML gives it: every key it has, and each step's commands character for character.
 IMAGE_JOB = {
-    "name": "image (ghcr.io)", "runs-on": "ubuntu-24.04", "timeout-minutes": 45, "env": {"DRYRUN": DRYRUN},
+    "name": "image (ghcr.io)", "needs": "tag", "runs-on": "ubuntu-24.04", "timeout-minutes": 45,
+    "env": FROM_THE_TAG_JOB,
     "defaults": BASH,
     "steps": [
-        {"uses": "actions/checkout@v4", "with": {"ref": "${{ env.RELEASE_TAG }}"}},
+        {"uses": "actions/checkout@v4", "with": {"ref": "refs/tags/${{ env.RELEASE_TAG }}"}},
         {"name": "Name the image", "id": "name", "run": NAMES_IT},
         {"name": "Build", "run": (
             "set -o pipefail\n"
@@ -131,7 +133,8 @@ IMAGE_JOB = {
 CREATES = {"name": "Create the release with the bundles as assets", "if": PUBLISHING}
 NOTES_SHA256 = "9aba4d9fed5d42376836217a18eb3fccd045c271d4e0feead485d3c44fa4652e"
 AROUND_THE_NOTES = [READS, "mapfile -t files < <(find assets -type f | sort)",
-                    'gh release create "$RELEASE_TAG" --title "NEXUS $RELEASE_TAG" --notes "$notes" "${files[@]}"', ""]
+                    'gh release create "$RELEASE_TAG" --verify-tag --title "NEXUS $RELEASE_TAG" --notes "$notes" '
+                    '"${files[@]}"', ""]
 CANNOT_PUSH = ("actions/checkout@", "actions/setup-python@", "actions/upload-artifact@", "actions/download-artifact@")
 OF_AN_IMAGE = re.compile(r"\b(?:docker|podman|skopeo|crane|oras|buildah|regctl|nerdctl)\b"
                          r"|\b(?:ghcr|docker|quay|gcr)\.io\b"
@@ -257,8 +260,9 @@ def reading_problems(workflow: str) -> list:
         problems.append(f"{len(creating)} step(s) of the release job are the one held here as creating the release "
                         f"(its keys, its four lines, its notes word for word by their hash): not one. "
                         f"{len(named)} have its name" + "".join(f": {step}" for step in named[:1]))
-    if sorted(wf.get("env") or {}) != ["RELEASE_TAG"]:
-        problems.append(f"the workflow's own environment is {sorted(wf.get('env') or {})}, not the release's tag alone")
+    if wf.get("env"):
+        problems.append(f"the workflow has an environment of its own, {sorted(wf['env'])}: the tag is read by the tag "
+                        "job alone")
     for name, job in jobs.items():
         if "uses" in job:
             problems.append(f"{name}: calls a workflow kept elsewhere ({job['uses']}); what that pushes is not read")
@@ -526,8 +530,8 @@ ALTERED = [
      "Image: $image:$RELEASE_TAG. Also ghcr.io/someone/console.", 1),
     ("every tag pushed at once", "          docker push " + NAMED + ':latest"\n',
      "          docker image push --all-tags " + NAMED + '"\n', 1),
-    ("an image named in the workflow's own environment", "env:\n  RELEASE_TAG:",
-     "env:\n  image: ghcr.io/someone/console\n  RELEASE_TAG:", 1),
+    ("an image named in an environment of the workflow's own", "\njobs:\n",
+     "\nenv:\n  image: ghcr.io/someone/console\n\njobs:\n", 1),
     # one plant for each line of the check that the others reach only together with another
     ("the image job run inside a container of its own", "    name: image (ghcr.io)\n",
      "    name: image (ghcr.io)\n    container: someone/console:latest\n", 1),
@@ -545,14 +549,17 @@ ALTERED = [
      '          dock\\\n          er push "$MIRROR"\n', 1),
     ("a continued line where a space was: bash joins the two words", "          docker push " + NAMED + ':latest"\n',
      "          docker\\\n          push " + NAMED + ':latest"\n', 1),
-    ("an environment name of its own on the image job", "    env:\n      DRYRUN:",
-     "    env:\n      MIRROR: registry.example/someone/console\n      DRYRUN:", 1),
+    ("an environment name of its own on the image job", "    env:\n      RELEASE_TAG: ${{ needs.tag.outputs.tag }}\n"
+     "      DRYRUN:", "    env:\n      RELEASE_TAG: ${{ needs.tag.outputs.tag }}\n      MIRROR: registry.example/someone/"
+     "console\n      DRYRUN:", 1),
     ("a key of its own on the step that creates the release: another repository for gh",
-     "      - name: Create the release with the bundles as assets\n        if: env.DRYRUN != 'true'\n",
-     "      - name: Create the release with the bundles as assets\n        if: env.DRYRUN != 'true'\n"
+     "      - name: Create the release with the bundles as assets\n        if: env.DRYRUN == 'false'\n",
+     "      - name: Create the release with the bundles as assets\n        if: env.DRYRUN == 'false'\n"
      "        env:\n          GH_REPO: someone/elsewhere\n", 1),
-    ("a dry run that would push: the image job reads another ending for it", "'-dryrun') }}\n    defaults:",
-     "'-never') }}\n    defaults:", 1),
+    ("a dry run that would push: the image job reads its flag from somewhere else",
+     "      DRYRUN: ${{ needs.tag.outputs.dryrun }}\n    defaults:", "      DRYRUN: 'false'\n    defaults:", 1),
+    ("the image job built before the tag is checked", "    name: image (ghcr.io)\n    needs: tag\n",
+     "    name: image (ghcr.io)\n", 1),
     ("the release job's shell a wrapper", "      GH_TOKEN: ${{ github.token }}\n    defaults:\n      run:\n"
      "        shell: bash\n", "      GH_TOKEN: ${{ github.token }}\n    defaults:\n      run:\n"
      "        shell: bash deploy/wrap.sh {0}\n", 1),
@@ -564,7 +571,7 @@ ALTERED = [
      'curl -sf -X PUT "https://quay.io/v2/someone/console/manifests/latest"\n', 1),
     # the third delta check's F2 and F6
     ("a dry run that would create the release: the creating step's condition dropped",
-     "      - name: Create the release with the bundles as assets\n        if: env.DRYRUN != 'true'\n",
+     "      - name: Create the release with the bundles as assets\n        if: env.DRYRUN == 'false'\n",
      "      - name: Create the release with the bundles as assets\n", 1),
     ("the step that creates the release under another name",
      "      - name: Create the release with the bundles as assets\n", "      - name: Create the release\n", 1),
@@ -587,8 +594,9 @@ def test_p4_companions_an_altered_workflow_is_named_by_the_reading_or_the_list_a
 def test_p4_companion_the_image_jobs_problem_says_where_it_differs():
     """The third delta check's F7: for a difference outside the steps the message named a seventh step."""
     workflow = read(WORKFLOW)
-    outside = reading_problems(swapped(workflow, "    env:\n      DRYRUN:",
-                                       "    env:\n      MIRROR: x\n      DRYRUN:", 1))
+    outside = reading_problems(swapped(workflow, "    env:\n      RELEASE_TAG: ${{ needs.tag.outputs.tag }}\n      DRYRUN:",
+                                       "    env:\n      RELEASE_TAG: ${{ needs.tag.outputs.tag }}\n      MIRROR: x\n"
+                                       "      DRYRUN:", 1))
     assert len(outside) == 1 and outside[0].endswith("it differs in ['env']"), outside
     inside = reading_problems(swapped(workflow, LAST_PUSH, LAST_PUSH + "          docker compose push\n", 1))
     assert len(inside) == 1 and "it differs in ['steps']; it has 6 step(s) for the 6 held, and the first that " \
@@ -628,9 +636,9 @@ QUIET = [
      'buildctl build --output type=image,name=registry.example/someone/console,push=true .\n'),
     ("a name of its own in the release job's environment", "      GH_TOKEN: ${{ github.token }}\n",
      "      GH_TOKEN: ${{ github.token }}\n      GH_REPO: someone/elsewhere\n"),
-    ("a key written twice, of which YAML keeps the last", "      - name: Push\n        if: env.DRYRUN != 'true'\n",
+    ("a key written twice, of which YAML keeps the last", "      - name: Push\n        if: env.DRYRUN == 'false'\n",
      "      - name: Push\n        run: docker push registry.example/someone/console\n"
-     "        if: env.DRYRUN != 'true'\n"),
+     "        if: env.DRYRUN == 'false'\n"),
 ]
 
 
@@ -638,7 +646,7 @@ QUIET = [
 def test_p4_companions_an_edit_the_reading_does_not_see_is_stopped_by_the_texts_hash(what, old, new):
     altered = swapped(read(WORKFLOW), old, new, 1)
     assert isinstance(yaml.safe_load(altered), dict), "the plant is a workflow that parses"
-    assert reading_problems(altered) == [], f"{what}: the reading or the list names it; it belongs with the fifty"
+    assert reading_problems(altered) == [], f"{what}: the reading or the list names it; it belongs with the altered workflows"
     named = text_problems(altered)
     assert len(named) == 1 and "is not the text held here" in named[0], what
 
